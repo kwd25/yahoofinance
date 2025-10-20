@@ -34,6 +34,13 @@ SYMS = env_list("SYMBOLS", DEFAULT_SYMBOLS)
 BACKFILL_YEARS = env_int("BACKFILL_YEARS", 10)
 INCREMENTAL_BUFFER_DAYS = env_int("BUFFER_DAYS", 7)
 
+def env_int(name: str, default: int) -> int:
+    v = os.getenv(name, "")
+    try: return int(v)
+    except (TypeError, ValueError): return default
+
+FORCE_RELOAD_DAYS = env_int("FORCE_RELOAD_DAYS", 1)  # 0 = disabled
+
 
 
 DATABRICKS_SERVER    = os.environ["DATABRICKS_SERVER"]
@@ -84,19 +91,24 @@ def get_current_max_date(cur) -> str | None:
     return to_yyyy_mm_dd(row[0] if row else None)
 
 def plan_date_window(cur):
-    current_max_str = get_current_max_date(cur)
-    today_str = date.today().isoformat()
-    end_str   = (date.today() + timedelta(days=1)).isoformat()  # yfinance end is exclusive
+    today = date.today()
+    end_str = (today + timedelta(days=1)).isoformat()  # yfinance end is exclusive
 
+    # Manual override
+    if FORCE_RELOAD_DAYS > 0:
+        start_str = (today - timedelta(days=FORCE_RELOAD_DAYS)).isoformat()
+        return start_str, end_str, f"force_reload_{FORCE_RELOAD_DAYS}d"
+
+    current_max_str = get_current_max_date(cur)  # existing helper returning 'YYYY-MM-DD' or None
     if current_max_str is None:
-        start_str = (date.today() - timedelta(days=BACKFILL_YEARS * 365)).isoformat()
-        mode = f"initial_backfill_{BACKFILL_YEARS}y"
-    else:
-        # overlap buffer for weekends/holidays
-        current_max_dt = datetime.fromisoformat(current_max_str).date()
-        start_str = (current_max_dt - timedelta(days=INCREMENTAL_BUFFER_DAYS)).isoformat()
-        mode = "incremental"
-    return start_str, end_str, mode
+        # initial backfill
+        start_str = (today - timedelta(days=BACKFILL_YEARS * 365)).isoformat()
+        return start_str, end_str, f"initial_backfill_{BACKFILL_YEARS}y"
+
+    # incremental with overlap buffer
+    current_max_dt = datetime.fromisoformat(current_max_str).date()
+    start_str = (current_max_dt - timedelta(days=INCREMENTAL_BUFFER_DAYS)).isoformat()
+    return start_str, end_str, "incremental"
 
 
 def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
