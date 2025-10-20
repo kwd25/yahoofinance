@@ -224,15 +224,20 @@ def main():
                 debug_after(cur)
                 return
 
-            all_df = all_df.rename(columns={"adj close": "adj_close"})
+            all_df = pd.concat(frames, ignore_index=True, sort=False)
+            all_df.columns = [c.lower() for c in all_df.columns]
+            if "adj close" in all_df.columns:
+                all_df = all_df.rename(columns={"adj close": "adj_close"})
+
+            EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
             for col in EXPECTED:
                 if col not in all_df.columns:
                     all_df[col] = pd.NA
-            all_df = all_df[EXPECTED].copy()  
+            all_df = all_df[EXPECTED].copy() 
 
-            # Sanitize types so each row is scalar values
             all_df["symbol"] = all_df["symbol"].astype("string").fillna("").astype(str)
             all_df["date"]   = pd.to_datetime(all_df["date"]).dt.date.astype(str)
+
 
             print(f"[DEBUG] fetched_rows_total={len(all_df)}")           # <— new
             rows = to_values_rows(all_df)
