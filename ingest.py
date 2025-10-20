@@ -1,5 +1,5 @@
 import os
-from datetime import date, timedelta
+from datetime import datetime, date, timedelta
 import pandas as pd
 import yfinance as yf
 from databricks import sql
