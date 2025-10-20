@@ -193,12 +193,25 @@ def merge_batch(cur, values_rows, batch_size=400):
             WHEN NOT MATCHED THEN INSERT *;
         """)
 
+def debug_where_am_i(cur):
+    cur.execute("SELECT current_catalog(), current_schema(), current_user()")
+    print("CTX:", cur.fetchone())
+    cur.execute(f"SELECT COUNT(*), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
+    print("BRONZE_BEFORE:", cur.fetchone())
+
+def debug_after(cur):
+    cur.execute(f"SELECT COUNT(*), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
+    print("BRONZE_AFTER:", cur.fetchone())
+
+
+
 def main():
     with sql.connect(server_hostname=DATABRICKS_SERVER,
                      http_path=DATABRICKS_HTTP_PATH,
                      access_token=DATABRICKS_TOKEN) as conn:
         with conn.cursor() as cur:
             ensure_table(cur)
+            debug_where_am_i(cur)
             start, end, mode = plan_date_window(cur)
             print(f"Ingest mode: {mode} | Range: {start} → {end} | Symbols: {len(SYMS)}")
 
@@ -226,9 +239,11 @@ def main():
             rows = to_values_rows(all_df)
             if not rows:
                 print("No rows to upsert.")
+                debug_after(cur)
                 return
 
             merge_batch(cur, rows)
+            debug_after(cur)
             print(f"Upserted {len(rows)} rows into {CATALOG}.{SCHEMA}.{TABLE}.")
 
 if __name__ == "__main__":
