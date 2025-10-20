@@ -139,32 +139,30 @@ def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
 def to_values_rows(df: pd.DataFrame):
-    """Build VALUES tuples from DataFrame rows; robust to pd.NA/None/strings."""
+    """Build VALUES tuples from exactly EXPECTED columns; robust to pd.NA/None."""
     rows = []
-    # Ensure expected columns exist and are ordered
-    for col in EXPECTED:
-        if col not in df.columns:
-            df[col] = pd.NA
-    df = df[EXPECTED]
-
-    for _, r in df.iterrows():
+    # df MUST already be limited to EXPECTED columns and sanitized
+    for symbol, date_str, open_v, high_v, low_v, close_v, adj_v, vol_v in df.itertuples(index=False, name=None):
         # symbol
-        symbol = "" if pd.isna(r["symbol"]) else str(r["symbol"])
-        symbol = symbol.replace("'", "''")
-
-        # date -> YYYY-MM-DD
-        dv = r["date"]
-        if pd.isna(dv):
-            continue  # skip if truly missing
-        date_str = str(dv)[:10]  # works for date, Timestamp, or ISO string
+        symbol = (symbol or "")
+        symbol = str(symbol).replace("'", "''")
 
         # numbers
-        def fnum(x): return "NULL" if pd.isna(x) else f"{float(x)}"
-        vol = "NULL" if pd.isna(r["volume"]) else f"{int(float(r['volume']))}"
+        def fnum(x):
+            try:
+                return "NULL" if pd.isna(x) else f"{float(x)}"
+            except Exception:
+                return "NULL"
+        vol = "NULL"
+        try:
+            if not pd.isna(vol_v):
+                vol = f"{int(float(vol_v))}"
+        except Exception:
+            vol = "NULL"
 
         rows.append(
             f"('{symbol}','{date_str}',"
-            f"{fnum(r['open'])},{fnum(r['high'])},{fnum(r['low'])},{fnum(r['close'])},{fnum(r['adj_close'])},{vol},"
+            f"{fnum(open_v)},{fnum(high_v)},{fnum(low_v)},{fnum(close_v)},{fnum(adj_v)},{vol},"
             f"current_timestamp())"
         )
     return rows
@@ -223,9 +221,18 @@ def main():
 
             if not frames:
                 print("No new data fetched.")
+                debug_after(cur)
                 return
 
-            all_df = pd.concat(frames, ignore_index=True, sort=False)
+            all_df = all_df.rename(columns={"adj close": "adj_close"})
+            for col in EXPECTED:
+                if col not in all_df.columns:
+                    all_df[col] = pd.NA
+            all_df = all_df[EXPECTED].copy()  
+
+            # Sanitize types so each row is scalar values
+            all_df["symbol"] = all_df["symbol"].astype("string").fillna("").astype(str)
+            all_df["date"]   = pd.to_datetime(all_df["date"]).dt.date.astype(str)
 
             print(f"[DEBUG] fetched_rows_total={len(all_df)}")           # <— new
             rows = to_values_rows(all_df)
