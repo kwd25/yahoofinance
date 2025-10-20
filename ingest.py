@@ -139,43 +139,32 @@ def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
 def to_values_rows(df: pd.DataFrame):
-    """Build VALUES tuples positionally; robust to pd.NA/None/NaN and stray columns."""
+    """Build VALUES tuples from DataFrame rows; robust to pd.NA/None/strings."""
     rows = []
-    # Lock column order and fill any missing columns with NA
-    df = df.reindex(columns=EXPECTED, fill_value=pd.NA)
+    # Ensure expected columns exist and are ordered
+    for col in EXPECTED:
+        if col not in df.columns:
+            df[col] = pd.NA
+    df = df[EXPECTED]
 
-    for t in df.itertuples(index=False, name=None):
-        # Defensive: only keep the expected 8 fields
-        t = (t[:8]) if len(t) >= 8 else (t + (None,) * (8 - len(t)))
-        symbol, date_val, open_v, high_v, low_v, close_v, adj_v, vol_v = t
-
-        # --- symbol (string sanitization) ---
-        if pd.isna(symbol):
-            symbol = ""
-        else:
-            symbol = str(symbol)
+    for _, r in df.iterrows():
+        # symbol
+        symbol = "" if pd.isna(r["symbol"]) else str(r["symbol"])
         symbol = symbol.replace("'", "''")
 
-        # --- date (ensure YYYY-MM-DD) ---
-        if pd.isna(date_val):
-            # skip rows with missing date
-            continue
-        if isinstance(date_val, datetime):
-            date_str = date_val.date().isoformat()
-        elif isinstance(date_val, date):
-            date_str = date_val.isoformat()
-        else:
-            # yfinance sometimes returns string-like; trim to first 10 chars if ISO-like
-            date_str = str(date_val)[:10]
+        # date -> YYYY-MM-DD
+        dv = r["date"]
+        if pd.isna(dv):
+            continue  # skip if truly missing
+        date_str = str(dv)[:10]  # works for date, Timestamp, or ISO string
 
-        # --- numeric helpers ---
-        def fnum(x):
-            return "NULL" if pd.isna(x) else f"{float(x)}"
-        vol = "NULL" if pd.isna(vol_v) else f"{int(float(vol_v))}"
+        # numbers
+        def fnum(x): return "NULL" if pd.isna(x) else f"{float(x)}"
+        vol = "NULL" if pd.isna(r["volume"]) else f"{int(float(r['volume']))}"
 
         rows.append(
             f"('{symbol}','{date_str}',"
-            f"{fnum(open_v)},{fnum(high_v)},{fnum(low_v)},{fnum(close_v)},{fnum(adj_v)},{vol},"
+            f"{fnum(r['open'])},{fnum(r['high'])},{fnum(r['low'])},{fnum(r['close'])},{fnum(r['adj_close'])},{vol},"
             f"current_timestamp())"
         )
     return rows
@@ -237,11 +226,11 @@ def main():
                 return
 
             all_df = pd.concat(frames, ignore_index=True, sort=False)
-            for col in EXPECTED:
-                if col not in all_df.columns:
-                    all_df[col] = pd.NA
-            all_df = all_df[EXPECTED]  # lock order
+
+            print(f"[DEBUG] fetched_rows_total={len(all_df)}")           # <— new
             rows = to_values_rows(all_df)
+            print(f"[DEBUG] values_rows_prepared={len(rows)}")          # <— new
+
             if not rows:
                 print("No rows to upsert.")
                 debug_after(cur)
