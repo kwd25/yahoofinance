@@ -11,16 +11,31 @@ CATALOG = os.getenv("CATALOG", "workspace")
 SCHEMA = os.getenv("SCHEMA", "yahoo")
 TABLE = os.getenv("BRONZE_TABLE", "bronze_prices")
 
+def env_int(name: str, default: int) -> int:
+    v = os.getenv(name, "")
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+def env_list(name: str, default_csv: str) -> list[str]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        raw = default_csv
+    return [s.strip().upper() for s in raw.split(",") if s.strip()]
+
+# defaults
 DEFAULT_SYMBOLS = ",".join([
     "AAPL","MSFT","GOOGL","AMZN","META","TSLA","NVDA","AMD","INTC","AVGO",
     "NFLX","CRM","ORCL","IBM","PYPL","SQ","SHOP","ADBE","QCOM","CSCO",
     "TSM","JPM","BAC","GS","MS","V","MA","AXP","XOM","CVX",
     "WMT","COST","HD","NKE","MCD","SBUX","JNJ","MRK","UNH","KO"
 ])
-SYMS = [s.strip().upper() for s in os.getenv("SYMBOLS", DEFAULT_SYMBOLS).split(",") if s.strip()]
 
-BACKFILL_YEARS = int(os.getenv("BACKFILL_YEARS", "10"))
-INCREMENTAL_BUFFER_DAYS = int(os.getenv("BUFFER_DAYS", "7"))
+SYMS = env_list("SYMBOLS", DEFAULT_SYMBOLS)
+BACKFILL_YEARS = env_int("BACKFILL_YEARS", 10)
+INCREMENTAL_BUFFER_DAYS = env_int("BUFFER_DAYS", 7)
+
 
 DATABRICKS_SERVER    = os.environ["DATABRICKS_SERVER"]
 DATABRICKS_HTTP_PATH = os.environ["DATABRICKS_HTTP_PATH"]
