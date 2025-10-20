@@ -126,28 +126,30 @@ def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 
 EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
-
 def to_values_rows(df: pd.DataFrame):
-    """Build VALUES tuples positionally to avoid attribute-name issues."""
+    """Build VALUES tuples positionally; be robust to extra cols."""
     rows = []
+    # Ensure we're iterating exactly in EXPECTED order
+    df = df.reindex(columns=EXPECTED, fill_value=pd.NA)
+
     for t in df.itertuples(index=False, name=None):
+        # Defensive: take only the first 8 fields expected
+        t = (t[:8]) if len(t) >= 8 else (t + (None,) * (8 - len(t)))
         symbol, date_str, open_v, high_v, low_v, close_v, adj_v, vol_v = t
 
         # sanitize
         symbol = (symbol or "").replace("'", "''")
-        # guard against datetime-like strings; keep YYYY-MM-DD
-        date_str = str(date_str)[:10] if date_str is not None else ""
+        date_str = (str(date_str)[:10]) if date_str is not None else ""
 
-        def num(x):  # floats
+        def fnum(x):
             return "NULL" if pd.isna(x) else f"{float(x)}"
-
         vol = "NULL" if pd.isna(vol_v) else f"{int(vol_v)}"
 
         rows.append(
-            f"('{symbol}','{date_str}',{num(open_v)},{num(high_v)},{num(low_v)},{num(close_v)},{num(adj_v)},{vol},current_timestamp())"
+            f"('{symbol}','{date_str}',{fnum(open_v)},{fnum(high_v)},{fnum(low_v)},{fnum(close_v)},{fnum(adj_v)},{vol},current_timestamp())"
         )
     return rows
-
+    
 
 def merge_batch(cur, values_rows, batch_size=400):
     for i in range(0, len(values_rows), batch_size):
@@ -187,13 +189,10 @@ def main():
                 return
 
             all_df = pd.concat(frames, ignore_index=True, sort=False)
-
-            # ensure all expected columns exist and are in the right order
             for col in EXPECTED:
                 if col not in all_df.columns:
                     all_df[col] = pd.NA
-            all_df = all_df[EXPECTED]
-
+            all_df = all_df[EXPECTED]  # lock order
             rows = to_values_rows(all_df)
             if not rows:
                 print("No rows to upsert.")
