@@ -1,0 +1,41 @@
+name: Daily Ingest to Databricks
+
+on:
+  schedule:
+    - cron: "10 12 * * *"   # 12:10 UTC daily ≈ 7:10 AM CT
+  workflow_dispatch: {}      # manual "Run workflow" button
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run ingest
+        env:
+          # Secrets: 
+          DATABRICKS_SERVER: ${{ secrets.DATABRICKS_SERVER }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+          # Optional repo variables (not secrets)
+          SYMBOLS: ${{ vars.SYMBOLS }}         # e.g., "AAPL,MSFT,GOOGL,AMZN,TSLA,..."
+          BACKFILL_YEARS: ${{ vars.BACKFILL_YEARS }}  # default 5 if unset
+          BUFFER_DAYS: ${{ vars.BUFFER_DAYS }}        # default 7 if unset
+
+          # Table location in databricks workspace
+          CATALOG: "workspace"
+          SCHEMA: "yahoo"
+          BRONZE_TABLE: "bronze_prices"
+        run: python ingest.py
