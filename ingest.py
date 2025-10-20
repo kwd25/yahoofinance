@@ -26,7 +26,7 @@ def env_list(name: str, default_csv: str) -> list[str]:
 
 DEFAULT_SYMBOLS = ",".join([
     "AAPL","MSFT","GOOGL","AMZN","META","TSLA","NVDA","AMD","INTC","AVGO",
-    "NFLX","CRM","ORCL","IBM","PYPL","SQ","SHOP","ADBE","QCOM","CSCO",
+    "NFLX","CRM","ORCL","IBM","PYPL","PEP","SHOP","ADBE","QCOM","CSCO",
     "TSM","JPM","BAC","GS","MS","V","MA","AXP","XOM","CVX",
     "WMT","COST","HD","NKE","MCD","SBUX","JNJ","MRK","UNH","KO"
 ])
@@ -127,26 +127,44 @@ def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
 def to_values_rows(df: pd.DataFrame):
-    """Build VALUES tuples positionally; be robust to extra cols."""
+    """Build VALUES tuples positionally; robust to pd.NA/None/NaN and stray columns."""
     rows = []
-    # Ensure we're iterating exactly in EXPECTED order
+    # Lock column order and fill any missing columns with NA
     df = df.reindex(columns=EXPECTED, fill_value=pd.NA)
 
     for t in df.itertuples(index=False, name=None):
-        # Defensive: take only the first 8 fields expected
+        # Defensive: only keep the expected 8 fields
         t = (t[:8]) if len(t) >= 8 else (t + (None,) * (8 - len(t)))
-        symbol, date_str, open_v, high_v, low_v, close_v, adj_v, vol_v = t
+        symbol, date_val, open_v, high_v, low_v, close_v, adj_v, vol_v = t
 
-        # sanitize
-        symbol = (symbol or "").replace("'", "''")
-        date_str = (str(date_str)[:10]) if date_str is not None else ""
+        # --- symbol (string sanitization) ---
+        if pd.isna(symbol):
+            symbol = ""
+        else:
+            symbol = str(symbol)
+        symbol = symbol.replace("'", "''")
 
+        # --- date (ensure YYYY-MM-DD) ---
+        if pd.isna(date_val):
+            # skip rows with missing date
+            continue
+        if isinstance(date_val, datetime):
+            date_str = date_val.date().isoformat()
+        elif isinstance(date_val, date):
+            date_str = date_val.isoformat()
+        else:
+            # yfinance sometimes returns string-like; trim to first 10 chars if ISO-like
+            date_str = str(date_val)[:10]
+
+        # --- numeric helpers ---
         def fnum(x):
             return "NULL" if pd.isna(x) else f"{float(x)}"
-        vol = "NULL" if pd.isna(vol_v) else f"{int(vol_v)}"
+        vol = "NULL" if pd.isna(vol_v) else f"{int(float(vol_v))}"
 
         rows.append(
-            f"('{symbol}','{date_str}',{fnum(open_v)},{fnum(high_v)},{fnum(low_v)},{fnum(close_v)},{fnum(adj_v)},{vol},current_timestamp())"
+            f"('{symbol}','{date_str}',"
+            f"{fnum(open_v)},{fnum(high_v)},{fnum(low_v)},{fnum(close_v)},{fnum(adj_v)},{vol},"
+            f"current_timestamp())"
         )
     return rows
     
