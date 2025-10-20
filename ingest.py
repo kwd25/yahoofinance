@@ -126,24 +126,25 @@ def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 
 EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
-all_df = all_df.reindex(columns=EXPECTED)  # add any missing as NaN, keep order
 
 def to_values_rows(df: pd.DataFrame):
+    """Build VALUES tuples positionally to avoid attribute-name issues."""
     rows = []
-    # Plain tuples: (symbol, date, open, high, low, close, adj_close, volume)
     for t in df.itertuples(index=False, name=None):
         symbol, date_str, open_v, high_v, low_v, close_v, adj_v, vol_v = t
 
         # sanitize
         symbol = (symbol or "").replace("'", "''")
-        date_str = str(date_str)[:10]  # guard against any datetime strings
+        # guard against datetime-like strings; keep YYYY-MM-DD
+        date_str = str(date_str)[:10] if date_str is not None else ""
 
-        def f(x):
+        def num(x):  # floats
             return "NULL" if pd.isna(x) else f"{float(x)}"
+
         vol = "NULL" if pd.isna(vol_v) else f"{int(vol_v)}"
 
         rows.append(
-            f"('{symbol}','{date_str}',{f(open_v)},{f(high_v)},{f(low_v)},{f(close_v)},{f(adj_v)},{vol},current_timestamp())"
+            f"('{symbol}','{date_str}',{num(open_v)},{num(high_v)},{num(low_v)},{num(close_v)},{num(adj_v)},{vol},current_timestamp())"
         )
     return rows
 
@@ -174,17 +175,25 @@ def main():
                 df = fetch(s, start, end)
                 if df.empty:
                     failed.append(s)
-                    continue
-                frames.append(df)
+                else:
+                    frames.append(df)
 
             if failed:
+                # informational only, we still ingest what we have
                 print(f"[INFO] {len(failed)} symbols returned no data or failed: {failed[:8]}{'...' if len(failed)>8 else ''}")
 
             if not frames:
                 print("No new data fetched.")
                 return
-                
-            all_df = pd.concat(frames, ignore_index=True)
+
+            all_df = pd.concat(frames, ignore_index=True, sort=False)
+
+            # ensure all expected columns exist and are in the right order
+            for col in EXPECTED:
+                if col not in all_df.columns:
+                    all_df[col] = pd.NA
+            all_df = all_df[EXPECTED]
+
             rows = to_values_rows(all_df)
             if not rows:
                 print("No rows to upsert.")
