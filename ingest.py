@@ -190,6 +190,30 @@ def debug_after(cur):
     cur.execute(f"SELECT COUNT(*), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
     print("BRONZE_AFTER:", cur.fetchone())
 
+def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten tuple/MultiIndex columns and normalize to lowercase strings."""
+    def flat(c):
+        if isinstance(c, tuple):
+            # choose the last non-empty part like ('AAPL','Adj Close') -> 'Adj Close'
+            parts = [p for p in c if p not in (None, "")]
+            name = parts[-1] if parts else ""
+            return str(name).lower()
+        return str(c).lower()
+
+    df = df.copy()
+    df.columns = [flat(c) for c in df.columns]
+    # unify common variants
+    if "adj close" in df.columns and "adj_close" not in df.columns:
+        df = df.rename(columns={"adj close": "adj_close"})
+    # sometimes date is 'datetime' or 'index'
+    if "date" not in df.columns:
+        if "datetime" in df.columns:
+            df = df.rename(columns={"datetime": "date"})
+        elif "index" in df.columns:
+            df = df.rename(columns={"index": "date"})
+    return df
+
+
 
 
 def main():
@@ -225,23 +249,21 @@ def main():
                 return
 
             all_df = pd.concat(frames, ignore_index=True, sort=False)
-            all_df.columns = [c.lower() for c in all_df.columns]
-            if "adj close" in all_df.columns:
-                all_df = all_df.rename(columns={"adj close": "adj_close"})
+            all_df = normalize_cols(all_df)
 
             EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
             for col in EXPECTED:
                 if col not in all_df.columns:
                     all_df[col] = pd.NA
-            all_df = all_df[EXPECTED].copy() 
+            all_df = all_df[EXPECTED].copy()  
 
             all_df["symbol"] = all_df["symbol"].astype("string").fillna("").astype(str)
             all_df["date"]   = pd.to_datetime(all_df["date"]).dt.date.astype(str)
 
 
-            print(f"[DEBUG] fetched_rows_total={len(all_df)}")           # <— new
+            print(f"[DEBUG] fetched_rows_total={len(all_df)}")
             rows = to_values_rows(all_df)
-            print(f"[DEBUG] values_rows_prepared={len(rows)}")          # <— new
+            print(f"[DEBUG] values_rows_prepared={len(rows)}")
 
             if not rows:
                 print("No rows to upsert.")
