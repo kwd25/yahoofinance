@@ -221,6 +221,11 @@ def main():
                 if df.empty:
                     failed.append(s)
                 else:
+                    try:
+                        dmin, dmax = df["date"].min(), df["date"].max()
+                        print(f"[DATA] {s}: {dmin} → {dmax} ({len(df)} rows)")
+                    except Exception:
+                        print(f"[DATA] {s}: {len(df)} rows")
                     frames.append(df)
 
             if failed:
