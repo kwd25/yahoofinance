@@ -125,17 +125,28 @@ def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
     return df
 
 
+EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
+all_df = all_df.reindex(columns=EXPECTED)  # add any missing as NaN, keep order
+
 def to_values_rows(df: pd.DataFrame):
     rows = []
-    for r in df.itertuples(index=False):
-        sym = r.symbol.replace("'", "''")
-        date_str = r.date
-        val = lambda x: "NULL" if pd.isna(x) else f"{float(x)}"
-        vol = "NULL" if pd.isna(r.volume) else f"{int(r.volume)}"
+    # Plain tuples: (symbol, date, open, high, low, close, adj_close, volume)
+    for t in df.itertuples(index=False, name=None):
+        symbol, date_str, open_v, high_v, low_v, close_v, adj_v, vol_v = t
+
+        # sanitize
+        symbol = (symbol or "").replace("'", "''")
+        date_str = str(date_str)[:10]  # guard against any datetime strings
+
+        def f(x):
+            return "NULL" if pd.isna(x) else f"{float(x)}"
+        vol = "NULL" if pd.isna(vol_v) else f"{int(vol_v)}"
+
         rows.append(
-            f"('{sym}','{date_str}',{val(r.open)},{val(r.high)},{val(r.low)},{val(r.close)},{val(r.adj_close)},{vol},current_timestamp())"
+            f"('{symbol}','{date_str}',{f(open_v)},{f(high_v)},{f(low_v)},{f(close_v)},{f(adj_v)},{vol},current_timestamp())"
         )
     return rows
+
 
 def merge_batch(cur, values_rows, batch_size=400):
     for i in range(0, len(values_rows), batch_size):
