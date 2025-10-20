@@ -24,17 +24,16 @@ def env_list(name: str, default_csv: str) -> list[str]:
         raw = default_csv
     return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
-# defaults
 DEFAULT_SYMBOLS = ",".join([
     "AAPL","MSFT","GOOGL","AMZN","META","TSLA","NVDA","AMD","INTC","AVGO",
     "NFLX","CRM","ORCL","IBM","PYPL","SQ","SHOP","ADBE","QCOM","CSCO",
     "TSM","JPM","BAC","GS","MS","V","MA","AXP","XOM","CVX",
     "WMT","COST","HD","NKE","MCD","SBUX","JNJ","MRK","UNH","KO"
 ])
-
 SYMS = env_list("SYMBOLS", DEFAULT_SYMBOLS)
 BACKFILL_YEARS = env_int("BACKFILL_YEARS", 10)
 INCREMENTAL_BUFFER_DAYS = env_int("BUFFER_DAYS", 7)
+
 
 
 DATABRICKS_SERVER    = os.environ["DATABRICKS_SERVER"]
@@ -55,39 +54,76 @@ def ensure_table(cur):
         ) USING DELTA
     """)
 
-def get_current_max_date(cur):
+def to_yyyy_mm_dd(obj) -> str | None:
+    """Normalize anything (str/datetime/date) to 'YYYY-MM-DD' or None."""
+    if obj is None:
+        return None
+    if isinstance(obj, date) and not isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, datetime):
+        return obj.date().isoformat()
+    if isinstance(obj, str):
+        # Trim to first 10 chars if it's an ISO with time (YYYY-MM-DDTHH:MM:SS)
+        if len(obj) >= 10 and obj[4] == "-" and obj[7] == "-":
+            return obj[:10]
+        # Fallback parse
+        try:
+            return datetime.fromisoformat(obj).date().isoformat()
+        except Exception:
+            pass
+    # As a last resort, let pandas try
+    try:
+        import pandas as pd
+        return pd.to_datetime(obj).date().isoformat()
+    except Exception:
+        return None
+
+def get_current_max_date(cur) -> str | None:
     cur.execute(f"SELECT MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
     row = cur.fetchone()
-    
-    return row[0] if row and row[0] is not None else None
+    return to_yyyy_mm_dd(row[0] if row else None)
 
 def plan_date_window(cur):
-    """Decide START and END based on whether we have data already."""
-    current_max = get_current_max_date(cur)
-    today = date.today()
-    end = (today + timedelta(days=1)).isoformat()  # yfinance end is exclusive
+    current_max_str = get_current_max_date(cur)
+    today_str = date.today().isoformat()
+    end_str   = (date.today() + timedelta(days=1)).isoformat()  # yfinance end is exclusive
 
-    if current_max is None:
-        # Initial backfill
-        start = (today - timedelta(days=BACKFILL_YEARS * 365)).isoformat()
+    if current_max_str is None:
+        start_str = (date.today() - timedelta(days=BACKFILL_YEARS * 365)).isoformat()
         mode = f"initial_backfill_{BACKFILL_YEARS}y"
     else:
-        # Incremental window with a small overlap buffer
-        start_dt = current_max - timedelta(days=INCREMENTAL_BUFFER_DAYS)
-        start = start_dt.isoformat()
+        # overlap buffer for weekends/holidays
+        current_max_dt = datetime.fromisoformat(current_max_str).date()
+        start_str = (current_max_dt - timedelta(days=INCREMENTAL_BUFFER_DAYS)).isoformat()
         mode = "incremental"
-    return start, end, mode
+    return start_str, end_str, mode
+
 
 def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
-    df = yf.download(symbol, start=start, end=end, interval="1d", auto_adjust=False, progress=False)
-    if df.empty:
-        return df
+    # yfinance prefers 'YYYY-MM-DD' strings or date objects
+    try:
+        df = yf.download(symbol, start=start, end=end, interval="1d",
+                         auto_adjust=False, progress=False)
+    except Exception as e:
+        print(f"[WARN] fetch failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
     df = df.reset_index().rename(columns=str.lower)
+    # yfinance sometimes returns 'date' as Timestamp with time -> force to date
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date']).dt.date.astype(str)
+
     df["symbol"] = symbol
-    df = df[["symbol","date","open","high","low","close","adj close","volume"]]
-    df = df.rename(columns={"adj close":"adj_close"})
-    df["date"] = pd.to_datetime(df["date"]).dt.date.astype(str)
+    cols = ["symbol","date","open","high","low","close","adj close","volume"]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = None
+    df = df[cols].rename(columns={"adj close": "adj_close"})
     return df
+
 
 def to_values_rows(df: pd.DataFrame):
     rows = []
@@ -122,16 +158,21 @@ def main():
             start, end, mode = plan_date_window(cur)
             print(f"Ingest mode: {mode} | Range: {start} → {end} | Symbols: {len(SYMS)}")
 
-            frames = []
+            frames, failed = [], []
             for s in SYMS:
                 df = fetch(s, start, end)
-                if not df.empty:
-                    frames.append(df)
+                if df.empty:
+                    failed.append(s)
+                    continue
+                frames.append(df)
+
+            if failed:
+                print(f"[INFO] {len(failed)} symbols returned no data or failed: {failed[:8]}{'...' if len(failed)>8 else ''}")
 
             if not frames:
                 print("No new data fetched.")
                 return
-
+                
             all_df = pd.concat(frames, ignore_index=True)
             rows = to_values_rows(all_df)
             if not rows:
