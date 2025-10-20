@@ -1,5 +1,3 @@
-# yahoofinance
-
 # Yahoo Finance Bronze → Silver/Gold (Databricks)
 
 Daily batch ingest from yfinance into `workspace.yahoo.bronze_prices` via the Databricks SQL connector.
