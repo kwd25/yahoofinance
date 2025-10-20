@@ -1,0 +1,3 @@
+yfinance>=0.2.40
+pandas>=2.2.2
+databricks-sql-connector>=3.3.0
