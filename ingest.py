@@ -24,13 +24,72 @@ def env_list(name: str, default_csv: str) -> list[str]:
         raw = default_csv
     return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
-DEFAULT_SYMBOLS = ",".join([
-    "AAPL","MSFT","GOOGL","AMZN","META","TSLA","NVDA","AMD","INTC","AVGO",
-    "NFLX","CRM","ORCL","IBM","PYPL","PEP","SHOP","ADBE","QCOM","CSCO",
-    "TSM","JPM","BAC","GS","MS","V","MA","AXP","XOM","CVX",
-    "WMT","COST","HD","NKE","MCD","SBUX","JNJ","MRK","UNH","KO"
-])
-SYMS = env_list("SYMBOLS", DEFAULT_SYMBOLS)
+
+def _normalize_yahoo_symbol(s: str) -> str:
+    # Yahoo uses '-' instead of '.' for share classes (e.g., BRK.B -> BRK-B)
+    s = s.strip().upper()
+    return s.replace('.', '-')
+
+def load_symbols() -> list[str]:
+    """
+    Load tickers for ingest. Priority:
+    1) SYMBOL_SOURCE=sp500 -> scrape Wikipedia
+    2) data/sp500.csv in repo (one column named 'symbol' or headerless)
+    3) fallback: a small static list so the job still runs
+    You can also cap with SYMBOL_LIMIT env var for testing.
+    """
+    src = os.getenv("SYMBOL_SOURCE", "sp500").lower()
+    limit = int(os.getenv("SYMBOL_LIMIT", "0"))  # 0 = no cap
+
+    symbols: list[str] = []
+
+    if src == "sp500":
+        try:
+            # Wikipedia page with latest constituents
+            tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+            df = tables[0]
+            col = "Symbol" if "Symbol" in df.columns else df.columns[0]
+            symbols = [ _normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str).tolist() ]
+        except Exception as e:
+            print(f"[WARN] Could not fetch S&P 500 from Wikipedia: {e}")
+
+    if not symbols:
+        # Try local CSV in your repo (put at data/sp500.csv)
+        csv_path = os.getenv("SP500_CSV", "data/sp500.csv")
+        try:
+            df = pd.read_csv(csv_path, header=0)
+        except Exception:
+            try:
+                df = pd.read_csv(csv_path, header=None, names=["symbol"])
+            except Exception as e:
+                print(f"[WARN] Could not load {csv_path}: {e}")
+                df = None
+        if df is not None:
+            col = "symbol" if "symbol" in df.columns else df.columns[0]
+            symbols = [ _normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str).tolist() ]
+
+    if not symbols:
+        # Last-resort minimal list so the pipeline still runs
+        symbols = ["AAPL","MSFT","GOOGL","AMZN","META"]
+
+    # De-dup & optional cap for testing
+    uniq = []
+    seen = set()
+    for s in symbols:
+        if s and s not in seen:
+            seen.add(s); uniq.append(s)
+
+    if limit and limit > 0:
+        uniq = uniq[:limit]
+
+    print(f"[SYMS] Loaded {len(uniq)} symbols (source={src})")
+    if len(uniq) > 0:
+        print(f"[SYMS] Sample: {', '.join(uniq[:10])} ...")
+
+    return uniq
+
+
+SYMS = SYMS = load_symbols()
 BACKFILL_YEARS = env_int("BACKFILL_YEARS", 10)
 INCREMENTAL_BUFFER_DAYS = env_int("BUFFER_DAYS", 7)
 
