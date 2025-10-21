@@ -112,10 +112,16 @@ def plan_date_window(cur):
 
 
 def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
-    # yfinance prefers 'YYYY-MM-DD' strings or date objects
     try:
-        df = yf.download(symbol, start=start, end=end, interval="1d",
-                         auto_adjust=False, progress=False)
+        df = yf.download(
+            symbol,
+            start=start,
+            end=end,               # end is exclusive
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="column",     # ensure non-MultiIndex when possible
+        )
     except Exception as e:
         print(f"[WARN] fetch failed for {symbol}: {e}")
         return pd.DataFrame()
@@ -123,18 +129,43 @@ def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
-    df = df.reset_index().rename(columns=str.lower)
-    # yfinance sometimes returns 'date' as Timestamp with time -> force to date
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date']).dt.date.astype(str)
+    # Flatten possible MultiIndex columns like ('Open','AMZN') -> 'open'
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.copy()
+        df.columns = [str(c[0]).lower() for c in df.columns]
+    else:
+        df = df.rename(columns=str.lower)
 
-    df["symbol"] = symbol
-    cols = ["symbol","date","open","high","low","close","adj close","volume"]
-    for c in cols:
+    # Make sure we have a 'date' column
+    if "date" not in df.columns:
+        df = df.reset_index()
+        df.columns = [str(c).lower() for c in df.columns]
+        if "index" in df.columns and "date" not in df.columns:
+            df = df.rename(columns={"index": "date"})
+
+    # Unify adj close name
+    if "adj close" in df.columns and "adj_close" not in df.columns:
+        df = df.rename(columns={"adj close": "adj_close"})
+
+    # Ensure required columns exist
+    for c in ["open", "high", "low", "close", "adj_close", "volume"]:
         if c not in df.columns:
-            df[c] = None
-    df = df[cols].rename(columns={"adj close": "adj_close"})
-    return df
+            df[c] = pd.NA
+
+    # Normalize types/values
+    df["date"] = pd.to_datetime(df["date"]).dt.date.astype(str)
+    df["symbol"] = symbol.upper()
+
+    # Drop true placeholders and require a real close
+    price_cols = ["open", "high", "low", "close", "adj_close", "volume"]
+    df = df.dropna(how="all", subset=price_cols)
+    df = df[df["close"].notna()]
+
+    if df.empty:
+        return pd.DataFrame()
+
+    return df[["symbol", "date", "open", "high", "low", "close", "adj_close", "volume"]]
+
 
 
 EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
