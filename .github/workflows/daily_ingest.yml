@@ -21,6 +21,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install yfinance pandas lxml databricks-sql-connector
 
       - name: Run ingest
         env:
@@ -31,6 +32,7 @@ jobs:
 
           # Optional repo variables (not secrets)
           SYMBOLS: ${{ vars.SYMBOLS }}         # e.g., "AAPL,MSFT,GOOGL,AMZN,TSLA,..."
+          SYMBOL_SOURCE: "sp500"
           BACKFILL_YEARS: ${{ vars.BACKFILL_YEARS }}  # default 5 if unset
           BUFFER_DAYS: ${{ vars.BUFFER_DAYS }}        # default 7 if unset
 
