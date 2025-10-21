@@ -26,68 +26,78 @@ def env_list(name: str, default_csv: str) -> list[str]:
 
 
 def _normalize_yahoo_symbol(s: str) -> str:
-    # Yahoo uses '-' instead of '.' for share classes (e.g., BRK.B -> BRK-B)
-    s = s.strip().upper()
-    return s.replace('.', '-')
+    return s.strip().upper().replace('.', '-')  # e.g. BRK.B -> BRK-B
 
 def load_symbols() -> list[str]:
     """
-    Load tickers for ingest. Priority:
-    1) SYMBOL_SOURCE=sp500 -> scrape Wikipedia
-    2) data/sp500.csv in repo (one column named 'symbol' or headerless)
-    3) fallback: a small static list so the job still runs
-    You can also cap with SYMBOL_LIMIT env var for testing.
+    Priority:
+      1) local CSV (repo)   -> data/sp500.csv (stable, no network)
+      2) yfinance helper    -> yf.tickers_sp500()
+      3) Wikipedia scrape   -> requests + read_html (with UA)
+      4) tiny fallback list
+    Optional cap via SYMBOL_LIMIT. Gate via MIN_SYMBOLS to avoid tiny runs.
     """
-    src = os.getenv("SYMBOL_SOURCE", "sp500").lower()
-    limit = int(os.getenv("SYMBOL_LIMIT", "0"))  # 0 = no cap
-
     symbols: list[str] = []
 
-    if src == "sp500":
+    # 1) repo CSV (best: deterministic, no 403)
+    csv_path = os.getenv("SP500_CSV", "data/sp500.csv")
+    try:
+        df = pd.read_csv(csv_path)
+        col = next((c for c in df.columns if c.lower().startswith("symbol")), df.columns[0])
+        symbols = [_normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str)]
+        print(f"[SYMS] Loaded {len(symbols)} from CSV: {csv_path}")
+    except Exception as e:
+        print(f"[WARN] Could not load {csv_path}: {e}")
+
+    # 2) yfinance helper (often works; no lxml required)
+    if not symbols:
         try:
-            # Wikipedia page with latest constituents
-            tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+            import yfinance as yf
+            raw = yf.tickers_sp500()
+            symbols = [_normalize_yahoo_symbol(x) for x in raw] if raw else []
+            if symbols:
+                print(f"[SYMS] Loaded {len(symbols)} from yfinance.tickers_sp500()")
+        except Exception as e:
+            print(f"[WARN] yfinance.tickers_sp500 failed: {e}")
+
+    # 3) Wikipedia with headers (403-safe most of the time; needs requests)
+    if not symbols:
+        try:
+            import requests
+            headers = {"User-Agent": "Mozilla/5.0 (ingest-bot)"}
+            url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+            html = requests.get(url, headers=headers, timeout=20).text
+            tables = pd.read_html(html)  # needs lxml or html5lib
             df = tables[0]
             col = "Symbol" if "Symbol" in df.columns else df.columns[0]
-            symbols = [ _normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str).tolist() ]
+            symbols = [_normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str)]
+            if symbols:
+                print(f"[SYMS] Loaded {len(symbols)} from Wikipedia")
         except Exception as e:
-            print(f"[WARN] Could not fetch S&P 500 from Wikipedia: {e}")
+            print(f"[WARN] Wikipedia scrape failed: {e}")
 
+    # 4) last-resort small list
     if not symbols:
-        # Try local CSV in your repo (put at data/sp500.csv)
-        csv_path = os.getenv("SP500_CSV", "data/sp500.csv")
-        try:
-            df = pd.read_csv(csv_path, header=0)
-        except Exception:
-            try:
-                df = pd.read_csv(csv_path, header=None, names=["symbol"])
-            except Exception as e:
-                print(f"[WARN] Could not load {csv_path}: {e}")
-                df = None
-        if df is not None:
-            col = "symbol" if "symbol" in df.columns else df.columns[0]
-            symbols = [ _normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str).tolist() ]
+        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+        print("[SYMS] Using tiny fallback list (5 symbols)")
 
-    if not symbols:
-        # Last-resort minimal list so the pipeline still runs
-        symbols = ["AAPL","MSFT","GOOGL","AMZN","META"]
-
-    # De-dup & optional cap for testing
-    uniq = []
-    seen = set()
+    # de-dupe + optional cap
+    seen, uniq = set(), []
     for s in symbols:
         if s and s not in seen:
             seen.add(s); uniq.append(s)
 
-    if limit and limit > 0:
+    limit = int(os.getenv("SYMBOL_LIMIT", "0"))
+    if limit > 0:
         uniq = uniq[:limit]
 
-    print(f"[SYMS] Loaded {len(uniq)} symbols (source={src})")
-    if len(uniq) > 0:
-        print(f"[SYMS] Sample: {', '.join(uniq[:10])} ...")
+    # safety gate (optional)
+    min_symbols = int(os.getenv("MIN_SYMBOLS", "0"))
+    if min_symbols and len(uniq) < min_symbols:
+        raise SystemExit(f"Only {len(uniq)} symbols loaded (<{min_symbols}); aborting run.")
 
+    print(f"[SYMS] Final symbol count: {len(uniq)} | Sample: {', '.join(uniq[:10])}...")
     return uniq
-
 
 SYMS = SYMS = load_symbols()
 BACKFILL_YEARS = env_int("BACKFILL_YEARS", 10)
