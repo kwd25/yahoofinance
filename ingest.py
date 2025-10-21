@@ -229,6 +229,21 @@ def main():
             frames, failed = [], []
             for s in SYMS:
                 df = fetch(s, start, end)
+
+                # === paste these debug prints right here ===
+                try:
+                    rows = 0 if df is None else len(df)
+                    dmin = None if df is None or df.empty else df["date"].min()
+                    dmax = None if df is None or df.empty else df["date"].max()
+                    print(f"[FETCH] {s} window {start}→{end} rows={rows} min={dmin} max={dmax}")
+
+                    if df is not None and not df.empty:
+                        cols = [c for c in ["date","open","high","low","close","adj_close","volume"] if c in df.columns]
+                        print(df[cols].tail(2).to_string(index=False))
+                except Exception as e:
+                    print(f"[FETCH] {s} print error: {e}")
+                # === end debug ===
+                
                 if df.empty:
                     failed.append(s)
                 else:
