@@ -36,7 +36,7 @@ jobs:
           BACKFILL_YEARS: ${{ vars.BACKFILL_YEARS }}  # default 5 if unset
           BUFFER_DAYS: ${{ vars.BUFFER_DAYS }}        # default 7 if unset
 
-          FORCE_RELOAD_DAYS: "10"
+          FORCE_RELOAD_DAYS: "3650"
 
           # Table location in databricks workspace
           CATALOG: "workspace"
