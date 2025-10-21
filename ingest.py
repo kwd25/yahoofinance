@@ -279,6 +279,8 @@ def main():
             print(f"[DEBUG] fetched_rows_total={len(all_df)}")
             rows = to_values_rows(all_df)
             print(f"[DEBUG] values_rows_prepared={len(rows)}")
+            if rows:
+                print("[MERGE] first_tuple:\n", rows[0])
 
             if not rows:
                 print("No rows to upsert.")
