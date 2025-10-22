@@ -30,60 +30,40 @@ def env_list(name: str, default_csv: str) -> list[str]:
 def _normalize_yahoo_symbol(s: str) -> str:
     return s.strip().upper().replace('.', '-')  # e.g. BRK.B -> BRK-B
 
+SYMBOLS_STATIC: list[str] = ['A','AAPL','ABBV','ABNB','ABT','ACGL','ACN','ADBE','ADI','ADM','ADP','ADSK','AEE','AEP','AES','AFL','AIG','AIZ','AJG','AKAM','ALB','ALGN','ALL','ALLE','AMAT','AMCR','AMD','AME','AMGN','AMP','AMT','AMZN','ANET','AON','AOS','APA','APD','APH','APO','APP','APTV','ARE','ATO','AVB','AVGO','AVY','AWK','AXON','AXP','AZO','BA','BAC','BALL','BAX','BBY','BDX','BEN','BF-B','BG','BIIB','BK','BKNG','BKR','BLDR','BLK','BMY','BR','BRK-B','BRO','BSX','BX','BXP','C','CAG','CAH','CARR','CAT','CB','CBOE','CBRE','CCI','CCL','CDNS','CDW','CEG','CF','CFG','CHD','CHRW','CHTR','CI','CINF','CL','CLX','CMCSA','CME','CMG','CMI','CMS','CNC','CNP','COF','COIN','COO','COP','COR','COST','CPAY','CPB','CPRT','CPT','CRL','CRM','CRWD','CSCO','CSGP','CSX','CTAS','CTRA','CTSH','CTVA','CVS','CVX','D','DAL','DASH','DAY','DD','DDOG','DE','DECK','DELL','DG','DGX','DHI','DHR','DIA','DIS','DLR','DLTR','DOC','DOV','DOW','DPZ','DRI','DTE','DUK','DVA','DVN','DXCM','EA','EBAY','ECL','ED','EFX','EG','EIX','EL','ELV','EME','EMN','EMR','EOG','EPAM','EQIX','EQR','EQT','ERIE','ES','ESS','ETN','ETR','EVRG','EW','EXC','EXE','EXPD','EXPE','EXR','F','FANG','FAST','FCX','FDS','FDX','FE','FFIV','FI','FICO','FIS','FITB','FOX','FOXA','FRT','FSLR','FTNT','FTV','GD','GDDY','GE','GEHC','GEN','GEV','GILD','GIS','GL','GLW','GM','GNRC','GOOG','GOOGL','GPC','GPN','GRMN','GS','GWW','HAL','HAS','HBAN','HCA','HD','HIG','HII','HLT','HOLX','HON','HOOD','HPE','HPQ','HRL','HSIC','HST','HSY','HUBB','HUM','HWM','IBKR','IBM','ICE','IDXX','IEX','IFF','INCY','INTC','INTU','INVH','IP','IPG','IQV','IR','IRM','ISRG','IT','ITW','IVZ','IWM','J','JBHT','JBL','JCI','JKHY','JNJ','JPM','K','KDP','KEY','KEYS','KHC','KIM','KKR','KLAC','KMB','KMI','KMX','KO','KR','KVUE','L','LDOS','LEN','LH','LHX','LII','LIN','LKQ','LLY','LMT','LNT','LOW','LRCX','LULU','LUV','LVS','LW','LYB','LYV','MA','MAA','MAR','MAS','MCD','MCHP','MCK','MCO','MDLZ','MDT','MET','META','MGM','MHK','MKC','MLM','MMC','MMM','MNST','MO','MOH','MOS','MPC','MPWR','MRK','MRNA','MS','MSCI','MSFT','MSI','MTB','MTCH','MTD','MU','NCLH','NDAQ','NDSN','NEE','NEM','NFLX','NI','NKE','NOC','NOW','NRG','NSC','NTAP','NTRS','NUE','NVDA','NVR','NWS','NWSA','NXPI','O','ODFL','OKE','OMC','ON','ORCL','ORLY','OTIS','OXY','PANW','PAYC','PAYX','PCAR','PCG','PEG','PEP','PFE','PFG','PG','PGR','PH','PHM','PKG','PLD','PLTR','PM','PNC','PNR','PNW','PODD','POOL','PPG','PPL','PRU','PSA','PSKY','PSX','PTC','PWR','PYPL','QCOM','QQQ','RCL','REG','REGN','RF','RJF','RL','RMD','ROK','ROL','ROP','ROST','RSG','RTX','RVTY','SBAC','SBUX','SCHW','SHOP','SHW','SJM','SLB','SMCI','SNA','SNPS','SO','SOLV','SPG','SPGI','SPY','SRE','STE','STLD','STT','STX','STZ','SW','SWK','SWKS','SYF','SYK','SYY','T','TAP','TDG','TDY','TECH','TEL','TER','TFC','TGT','TJX','TKO','TMO','TMUS','TPL','TPR','TRGP','TRMB','TROW','TRV','TSCO','TSLA','TSM','TSN','TT','TTD','TTWO','TXN','TXT','TYL','UAL','UBER','UDR','UHS','ULTA','UNH','UNP','UPS','URI','USB','V','VICI','VLO','VLTO','VMC','VRSK','VRSN','VRTX','VST','VTR','VTRS','VZ','WAB','WAT','WBD','WDAY','WDC','WEC','WELL','WFC','WM','WMB','WMT','WRB','WSM','WST','WTW','WY','WYNN','XEL','XLB','XLE','XLF','XLI','XLK','XLP','XLV','XLY','XOM','XYL','XYZ','YUM','ZBH','ZBRA','ZTS']
+
 def load_symbols() -> list[str]:
-    symbols: list[str] = []
-    csv_path = os.getenv("SP500_CSV", "data/sp500.csv")
-    try:
-        df = pd.read_csv(csv_path)
-        col = next((c for c in df.columns if c.lower().startswith("symbol")), df.columns[0])
-        symbols = [_normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str)]
-        print(f"[SYMS] Loaded {len(symbols)} from CSV: {csv_path}")
-    except Exception as e:
-        print(f"[WARN] Could not load {csv_path}: {e}")
-
-    if not symbols:
+    import os, json
+    syms = list(SYMBOLS_STATIC)
+    env_json = os.getenv("SYMBOLS_JSON")
+    env_csv  = os.getenv("SYMBOLS_CSV")
+    if env_json:
         try:
-            import yfinance as yf
-            raw = yf.tickers_sp500()
-            symbols = [_normalize_yahoo_symbol(x) for x in raw] if raw else []
-            if symbols:
-                print(f"[SYMS] Loaded {len(symbols)} from yfinance.tickers_sp500()")
+            syms = json.loads(env_json)
+            print(f"[SYMS] Using SYMBOLS_JSON override ({len(syms)})")
         except Exception as e:
-            print(f"[WARN] yfinance.tickers_sp500 failed: {e}")
-
-    if not symbols:
-        try:
-            import requests
-            headers = {"User-Agent": "Mozilla/5.0 (ingest-bot)"}
-            url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-            html = requests.get(url, headers=headers, timeout=20).text
-            tables = pd.read_html(html) 
-            df = tables[0]
-            col = "Symbol" if "Symbol" in df.columns else df.columns[0]
-            symbols = [_normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str)]
-            if symbols:
-                print(f"[SYMS] Loaded {len(symbols)} from Wikipedia")
-        except Exception as e:
-            print(f"[WARN] Wikipedia scrape failed: {e}")
-
-    if not symbols:
-        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
-        print("[SYMS] Using tiny fallback list (5 symbols)")
+            print(f"[WARN] SYMBOLS_JSON parse failed: {e}")
+    elif env_csv:
+        syms = [s.strip() for s in env_csv.split(",") if s.strip()]
+        print(f"[SYMS] Using SYMBOLS_CSV override ({len(syms)})")
 
     seen, uniq = set(), []
-    for s in symbols:
+    for s in syms:
+        s = (s or "").strip().upper().replace(".", "-")
         if s and s not in seen:
-            seen.add(s); uniq.append(s)
+            seen.add(s)
+            uniq.append(s)
 
-    limit = int(os.getenv("SYMBOL_LIMIT", "0"))
-    if limit > 0:
-        uniq = uniq[:limit]
+    shards = int(os.getenv("SHARDS", "1"))
+    idx    = int(os.getenv("SHARD_INDEX", "0"))
+    if shards > 1:
+        sharded = [s for i, s in enumerate(uniq) if i % shards == idx]
+        print(f"[SYMS] Shard {idx+1}/{shards}: {len(sharded)} symbols")
+        uniq = sharded
 
-    min_symbols = int(os.getenv("MIN_SYMBOLS", "0"))
-    if min_symbols and len(uniq) < min_symbols:
-        raise SystemExit(f"Only {len(uniq)} symbols loaded (<{min_symbols}); aborting run.")
-    print(f"[SYMS] Final symbol count: {len(uniq)} | Sample: {', '.join(uniq[:10])}...")
+    print(f"[SYMS] Final: {len(uniq)} | Sample: {', '.join(uniq[:10])} ...")
     return uniq
+
 
 SYMS = SYMS = load_symbols()
 BACKFILL_YEARS = env_int("BACKFILL_YEARS", 10)
