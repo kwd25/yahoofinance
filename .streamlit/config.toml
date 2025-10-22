@@ -1,0 +1,7 @@
+[theme]
+base="dark"
+primaryColor="#1E90FF"          # Bright Dodger Blue accents
+backgroundColor="#0E1117"       # Dark background
+secondaryBackgroundColor="#1C1F26"  # Slightly lighter panels
+textColor="#E6E6E6"             # Light gray text
+font="sans serif"
