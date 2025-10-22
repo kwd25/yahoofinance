@@ -40,7 +40,7 @@ tabs = st.tabs([
 # Momentum Leaderboard
 # -----------------------
 with tabs[0]:
-    st.subheader("Momentum Leaderboard — Top 15 Stocks")
+    st.subheader("Momentum Leaderboard, Top 15 Stocks")
     st.markdown(
         """
         This chart highlights the **15 strongest momentum performers** in the S&P 500 over the past 20 trading days.  
@@ -75,10 +75,10 @@ with tabs[0]:
     st.altair_chart(chart, use_container_width=True)
 
     st.caption("Each bar represents a stock’s recent 20-day momentum as a percentage change from 20 trading days ago.")
-    st.markdown("""**Feature Definitions**
-        - **20-Day Momentum (mom_20d)**: Measures a stock's percentage price change compared to 20 trading days ago.
-        - **Volatility (vol_20d)**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.
-        - **SMA (Simple Moving Average)**: The average closing price over a specific number of days (here, 20 and 50).""")
+    st.markdown("""**Feature Definitions**  
+        - **20-Day Momentum (mom_20d)**: Measures a stock's percentage price change compared to 20 trading days ago.  
+        - **Volatility (vol_20d)**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.  
+        - **SMA (Simple Moving Average)**: The average closing price over a specific number of days (here, 20 and 50).  """)
 # -----------------------
 # Momentum vs Volatility
 # -----------------------
