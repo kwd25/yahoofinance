@@ -37,8 +37,7 @@ jobs:
           MIN_SYMBOLS_SHARD: "80"             # guard: ~500/4 = ~125; pick a safe floor
 
           # --- Backfill window (one-time big run) ---
-          BACKFILL_YEARS: "10"                
-          FORCE_RELOAD_DAYS: "3650"
+          BACKFILL_YEARS: "10"         
 
           # --- Performance knobs ---
           WORKERS: "10"                       # per-runner threadpool for fetch()
