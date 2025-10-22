@@ -51,32 +51,6 @@ Install dependencies using:
 pip install -r requirements.txt
 ```
 
-## Usage
-
-1. Clone the repository:
-
-   ```
-   git clone https://github.com/kwd25/yfinance-project.git
-   cd yfinance-project
-   ```
-
-2. Run the ingestion script manually:
-
-   ```
-   python ingest.py
-   ```
-
-3. Optionally run preprocessing:
-
-   ```
-   python preprocess.py
-   ```
-
-4. Launch the Streamlit dashboard:
-
-   ```
-   streamlit run app.py
-   ```
 
 ## Notes
 
