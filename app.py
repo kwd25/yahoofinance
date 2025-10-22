@@ -73,12 +73,24 @@ with tabs[0]:
     )
 
     st.altair_chart(chart, use_container_width=True)
-
     st.caption("Each bar represents a stock’s recent 20-day momentum as a percentage change from 20 trading days ago.")
+
+    st.dataframe(
+        df1.rename(
+            columns={
+                "symbol": "Symbol",
+                "mom_20d_pct": "20-Day Momentum (%)",
+                "vol_20d": "Volatility",
+                "close": "Close Price ($)",
+            }
+        ).sort_values("20-Day Momentum (%)", ascending=False),
+        use_container_width=True,
+        hide_index=True,
+    )
     st.markdown("""**Feature Definitions:**  
         **20-Day Momentum (mom_20d)**: Measures a stock's percentage price change compared to 20 trading days ago.  
         **Volatility (vol_20d)**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.  
-        **SMA (Simple Moving Average)**: The average closing price over a specific number of days (here, 20 and 50).  """)
+        **Close Price** The closing price of the stock today.""")
 # -----------------------
 # Momentum vs Volatility
 # -----------------------
