@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import streamlit as st
 import databricks.sql as dbsql
+import altair as alt
 
 # -----------------------
 # Databricks connection
@@ -45,11 +46,6 @@ with tabs[0]:
         This chart highlights the **15 strongest momentum performers** in the S&P 500 over the past 20 trading days.  
         A high momentum percentage suggests recent outperformance, often signaling short-term strength or speculative attention.  
         Traders can use this view to quickly identify which stocks are *leading* or *lagging* the current market trend.
-        
-        **Feature Definitions**
-        - **20-Day Momentum (mom_20d)**: Measures a stock's percentage price change compared to 20 trading days ago.
-        - **Volatility (vol_20d)**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.
-        - **SMA (Simple Moving Average)**: The average closing price over a specific number of days (here, 20 and 50).
         """
         
     )
@@ -65,15 +61,25 @@ with tabs[0]:
     """
     df1 = run_query(q1)
 
-    st.markdown("### 📊 Top 15 Stocks by 20-Day Momentum")
-    st.bar_chart(
-        df1.set_index("symbol")["mom_20d_pct"].sort_values(),
-        height=500,
-        use_container_width=True
+    chart = (
+        alt.Chart(df1)
+        .mark_bar()
+        .encode(
+            x=alt.X("mom_20d_pct:Q", title="20-Day Momentum (%)"),
+            y=alt.Y("symbol:N", sort="-x", title="Symbol"),
+            color=alt.Color("mom_20d_pct:Q", scale=alt.Scale(scheme="blues")),
+            tooltip=["symbol", alt.Tooltip("mom_20d_pct:Q", title="20-Day Momentum (%)"), "vol_20d", "close"],
+        )
+        .properties(height=500, width="container")
     )
 
-    st.caption("**X-axis:** 20-Day Momentum (%) | **Y-axis:** Stock Symbol")
-    st.dataframe(df1.rename(columns={"mom_20d_pct": "20-Day Momentum (%)"}), use_container_width=True)
+    st.altair_chart(chart, use_container_width=True)
+
+    st.caption("Each bar represents a stock’s recent 20-day momentum as a percentage change from 20 trading days ago.")
+    st.markdown("""**Feature Definitions**
+        - **20-Day Momentum (mom_20d)**: Measures a stock's percentage price change compared to 20 trading days ago.
+        - **Volatility (vol_20d)**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.
+        - **SMA (Simple Moving Average)**: The average closing price over a specific number of days (here, 20 and 50).""")
 # -----------------------
 # Momentum vs Volatility
 # -----------------------
