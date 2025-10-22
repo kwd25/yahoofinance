@@ -192,21 +192,95 @@ with tabs[1]:
 # Price vs SMA
 # -----------------------
 with tabs[2]:
-    st.subheader("Price vs Moving Averages (Past 60 Days)")
+    st.subheader("Price vs. Moving Averages, 10-Day Trend")
 
-    symbol = st.selectbox("Select a Symbol", options=sorted(run_query(
-        f"SELECT DISTINCT symbol FROM {CATALOG}.{SCHEMA}.gold_features ORDER BY symbol"
-    )["symbol"].tolist()), index=0)
+    st.markdown(
+        """
+        This chart visualizes how a selected stock’s **closing price** compares to its **20-day** and **50-day Simple Moving Averages (SMAs)** over the last 10 trading days.    
+        **Closing Price** reflects the final price of the day, the market’s consensus value.  
+        **SMA (Simple Moving Average)** smooths short-term fluctuations, revealing underlying trends.  
+        """
+    )
 
+    # Symbol selector
+    symbols = run_query(f"SELECT DISTINCT symbol FROM {CATALOG}.{SCHEMA}.gold_features ORDER BY symbol")
+    selected_symbol = st.selectbox("Select a stock symbol:", symbols["symbol"].tolist(), index=0)
+
+    # Query 10-day lookback
     q3 = f"""
     WITH mx AS (SELECT CAST(MAX(date) AS DATE) AS d FROM {CATALOG}.{SCHEMA}.gold_features)
-    SELECT CAST(g.date AS DATE) AS date, close, sma_20, sma_50
+    SELECT
+      CAST(g.date AS DATE) AS date,
+      g.close,
+      g.sma_20,
+      g.sma_50
     FROM {CATALOG}.{SCHEMA}.gold_features g, mx
-    WHERE g.symbol = '{symbol}'
-      AND CAST(g.date AS DATE) >= date_sub(mx.d, 60)
+    WHERE g.symbol = '{selected_symbol}'
+      AND CAST(g.date AS DATE) >= date_sub(mx.d, 10)
     ORDER BY date
     """
     df3 = run_query(q3)
 
-    st.line_chart(df3.set_index("date")[["close", "sma_20", "sma_50"]])
-    st.dataframe(df3, use_container_width=True)
+    # --- Line chart: price + SMAs ---
+    base = alt.Chart(df3).encode(x=alt.X("date:T", title="Date"))
+
+    close_line = base.mark_line(color="steelblue", strokeWidth=2).encode(
+        y=alt.Y("close:Q", title="Price ($)"),
+        tooltip=[
+            alt.Tooltip("date:T", title="Date"),
+            alt.Tooltip("close:Q", title="Close ($)", format=".2f"),
+            alt.Tooltip("sma_20:Q", title="SMA (20-Day)", format=".2f"),
+            alt.Tooltip("sma_50:Q", title="SMA (50-Day)", format=".2f"),
+        ],
+    )
+
+    sma20_line = base.mark_line(color="orange", strokeDash=[4, 3]).encode(
+        y="sma_20:Q"
+    )
+
+    sma50_line = base.mark_line(color="green", strokeDash=[4, 3]).encode(
+        y="sma_50:Q"
+    )
+
+    chart = (
+        (close_line + sma20_line + sma50_line)
+        .properties(
+            height=500,
+            width="container",
+            title=f"{selected_symbol}: Price vs. 20 & 50-Day SMAs (Last 10 Days)"
+        )
+        .configure_legend(labelFontSize=12, titleFontSize=13)
+    )
+
+    st.altair_chart(chart, use_container_width=True)
+
+    st.markdown("""
+        **Interpretation:**  
+        - When **price > SMA(20)** → bullish short-term momentum.  
+        - When **price > SMA(50)** → longer-term strength and trend continuation.  
+        - When **price < both SMAs** → potential weakness or correction phase.  """)
+
+    # --- Data table ---
+    st.dataframe(
+        df3.rename(
+            columns={
+                "date": "Date",
+                "close": "Close ($)",
+                "sma_20": "SMA (20-Day)",
+                "sma_50": "SMA (50-Day)",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # --- Feature notes ---
+    st.markdown(
+        """
+        **Feature Notes:**  
+        **Closing Price:** Final market price per day.  
+        **SMA (20-Day):** Short-term average; reacts faster to price changes.  
+        **SMA (50-Day):** Long-term average; smooths broader trends.  
+        Tracking crossovers between the two often signals **trend shifts** or **momentum reversals**.
+        """
+    )
