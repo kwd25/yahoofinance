@@ -159,10 +159,10 @@ with tabs[1]:
     st.altair_chart(chart, use_container_width=True)
 
     st.markdown("""**Interpretation**  
-        **High Momentum, Low Volatility:** “Steady Winners” — consistent strength with manageable risk.  
-        **High Momentum, High Volatility:** “Hot Movers” — big gainers, but higher risk.  
-        **Low Momentum, Low Volatility:** “Stable/Neutral” — low excitement, steady.  
-        **Low Momentum, High Volatility:** “Falling/Choppy” — underperformers or volatile corrections.  """)
+        **High Momentum, Low Volatility:** “Steady Winners”, consistent strength with manageable risk (Top-left quadrant).  
+        **High Momentum, High Volatility:** “Hot Movers”, big gainers, but higher risk (Top-right quadrant).  
+        **Low Momentum, Low Volatility:** “Stable/Neutral”, low excitement, steady (Bottom-left quadrant).  
+        **Low Momentum, High Volatility:** “Falling/Choppy”, underperformers or volatile corrections (Bottom-right quadrant).  """)
 
     # --- Data table ---
     st.dataframe(
