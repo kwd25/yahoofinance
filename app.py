@@ -104,12 +104,6 @@ with tabs[1]:
 
         The **x-axis (Volatility)** measures how much a stock’s price fluctuates. Lower volatility = steadier performance.  
         The **y-axis (Momentum)** shows the recent 20-day percentage gain or loss. Higher = stronger short-term trend.  
-
-        **Interpretation**  
-        **High Momentum, Low Volatility:** “Steady Winners” — consistent strength with manageable risk.  
-        **High Momentum, High Volatility:** “Hot Movers” — big gainers, but higher risk.  
-        **Low Momentum, Low Volatility:** “Stable/Neutral” — low excitement, steady.  
-        **Low Momentum, High Volatility:** “Falling/Choppy” — underperformers or volatile corrections.  
         """
     )
 
@@ -154,13 +148,6 @@ with tabs[1]:
         .encode(y="y:Q")
     )
 
-    # Add quadrant labels
-    labels = pd.DataFrame([
-        {"vol_20d": vol_med * 0.6, "mom_20d_pct": mom_med * 1.6, "label": "📈 Steady Winners"},
-        {"vol_20d": vol_med * 1.6, "mom_20d_pct": mom_med * 1.6, "label": "⚡ Hot Movers"},
-        {"vol_20d": vol_med * 0.6, "mom_20d_pct": mom_med * 0.4, "label": "💤 Stable/Neutral"},
-        {"vol_20d": vol_med * 1.6, "mom_20d_pct": mom_med * 0.4, "label": "📉 Falling/Choppy"},
-    ])
 
     text = alt.Chart(labels).mark_text(
         align="center", baseline="middle", fontSize=13, fontWeight="bold", color="gray"
@@ -174,6 +161,12 @@ with tabs[1]:
     )
 
     st.altair_chart(chart, use_container_width=True)
+
+    st.markdown("""**Interpretation**  
+        **High Momentum, Low Volatility:** “Steady Winners” — consistent strength with manageable risk.  
+        **High Momentum, High Volatility:** “Hot Movers” — big gainers, but higher risk.  
+        **Low Momentum, Low Volatility:** “Stable/Neutral” — low excitement, steady.  
+        **Low Momentum, High Volatility:** “Falling/Choppy” — underperformers or volatile corrections.  """)
 
     # --- Data table ---
     st.dataframe(
