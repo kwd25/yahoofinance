@@ -149,12 +149,8 @@ with tabs[1]:
     )
 
 
-    text = alt.Chart(labels).mark_text(
-        align="center", baseline="middle", fontSize=13, fontWeight="bold", color="gray"
-    ).encode(x="vol_20d:Q", y="mom_20d_pct:Q", text="label")
-
     # Combine layers
-    chart = (scatter + vline + hline + text).properties(
+    chart = (scatter + vline + hline).properties(
         height=550,
         width="container",
         title="Momentum vs Volatility (20-Day Snapshot)"
