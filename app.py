@@ -67,7 +67,6 @@ with tabs[0]:
         .encode(
             x=alt.X("mom_20d_pct:Q", title="20-Day Momentum (%)"),
             y=alt.Y("symbol:N", sort="-x", title="Symbol"),
-            color=alt.Color("mom_20d_pct:Q", scale=alt.Scale(scheme="blues")),
             tooltip=["symbol", alt.Tooltip("mom_20d_pct:Q", title="20-Day Momentum (%)"), "vol_20d", "close"],
         )
         .properties(height=500, width="container")
