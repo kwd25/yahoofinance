@@ -1,45 +1,52 @@
-name: Daily Ingest to Databricks
+name: Ingest
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: "10 12 * * *"   # 12:10 UTC daily ≈ 7:10 AM CT
-  workflow_dispatch: {}      # manual "Run workflow" button
+    - cron: "45 1 * * 2-6"   # example: run after market close (adjust as you like)
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]   # 4 shards -> set to [0..N-1] for N shards
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install yfinance pandas lxml databricks-sql-connector
+          pip install yfinance pandas requests lxml databricks-sql-connector
 
-      - name: Run ingest
+      - name: Run ingest shard
         env:
-          # Secrets: 
-          DATABRICKS_SERVER: ${{ secrets.DATABRICKS_SERVER }}
+          # --- Databricks (use your existing secrets) ---
+          DATABRICKS_SERVER:    ${{ secrets.DATABRICKS_SERVER }}
           DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_TOKEN:     ${{ secrets.DATABRICKS_TOKEN }}
 
-          # Optional repo variables (not secrets)
-          SYMBOLS: ${{ vars.SYMBOLS }}         # e.g., "AAPL,MSFT,GOOGL,AMZN,TSLA,..."
+          # --- Symbol loading / sharding ---
           SYMBOL_SOURCE: "sp500"
-          BACKFILL_YEARS: ${{ vars.BACKFILL_YEARS }}  # default 5 if unset
-          BUFFER_DAYS: ${{ vars.BUFFER_DAYS }}        # default 7 if unset
+          # SP500_CSV: "data/sp500.csv"        # set if you commit a CSV fallback
+          SHARDS: "4"
+          SHARD_INDEX: "${{ matrix.shard }}"
+          MIN_SYMBOLS_SHARD: "80"             # guard: ~500/4 = ~125; pick a safe floor
 
-          FORCE_RELOAD_DAYS: "3650"
+          # --- Backfill window (one-time big run) ---
+          BACKFILL_YEARS: "10"                # or: FORCE_RELOAD_DAYS: "3650"
 
-          # Table location in databricks workspace
-          CATALOG: "workspace"
-          SCHEMA: "yahoo"
-          BRONZE_TABLE: "bronze_prices"
-        run: python ingest.py
+          # --- Performance knobs ---
+          WORKERS: "10"                       # per-runner threadpool for fetch()
+          FETCH_TIMEOUT: "90"                 # seconds per ticker (skip if stuck)
+          BATCH_ROWS: "5000"                  # rows per MERGE batch
+
+          # --- Logging (optional) ---
+          DEBUG: "0"
+          VALIDATE_ONLY: "0"
+
+        run: |
+          python ingest.py
