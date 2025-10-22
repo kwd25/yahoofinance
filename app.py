@@ -28,7 +28,7 @@ SCHEMA = "yahoo"
 # -----------------------
 st.set_page_config(page_title="Market Momentum Dashboard", layout="wide")
 st.title("Market Momentum Dashboard")
-st.caption("Fed by a S&P 500 daily batch data pipeline. Currently 339 fully backfilled symbols (all ~500 patch soon).")
+st.caption("Fed by a S&P 500 daily batch data pipeline. Currently 351 fully backfilled symbols (all ~500 patch soon).")
 last_updated_query = f"SELECT MAX(date) AS last_date FROM {CATALOG}.{SCHEMA}.gold_features"
 last_date_df = run_query(last_updated_query)
 last_date = pd.to_datetime(last_date_df["last_date"].iloc[0]).strftime("%B %d, %Y")
