@@ -4,6 +4,7 @@ from datetime import datetime, date, timedelta
 import pandas as pd
 import yfinance as yf
 from databricks import sql
+import databricks.sql as dbsql
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
 
 CATALOG = os.getenv("CATALOG", "workspace")
@@ -88,14 +89,6 @@ def fetch_with_timeout(symbol, start, end):
         except Exception as e:
             print(f"[WARN] {symbol} fetch exception: {e}")
             return pd.DataFrame()
-
-
-SHARDS = int(os.getenv("SHARDS", "1"))         
-SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))  
-
-if SHARDS > 1:
-    SYMS = [s for i, s in enumerate(SYMS) if i % SHARDS == SHARD_INDEX]
-    print(f"[SYMS] Shard {SHARD_INDEX+1}/{SHARDS}: {len(SYMS)} symbols")
 
 
 def ensure_table(cur):
@@ -264,25 +257,36 @@ def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def connect_with_retry(max_seconds: int = 600, first_sleep: int = 5):
-    server = os.environ["DATABRICKS_SERVER"].replace("https://","").replace("http://","").strip("/")
-    http_path = os.environ["DATABRICKS_HTTP_PATH"]
-    token = os.environ["DATABRICKS_TOKEN"]
+    import time
+    server = (globals().get("DATABRICKS_SERVER") or os.environ["DATABRICKS_SERVER"])
+    http   = (globals().get("DATABRICKS_HTTP_PATH") or os.environ["DATABRICKS_HTTP_PATH"])
+    token  = (globals().get("DATABRICKS_TOKEN") or os.environ["DATABRICKS_TOKEN"])
+
+    server = server.replace("https://","").replace("http://","").strip("/")
 
     delay = first_sleep
     deadline = time.time() + max_seconds
+    attempt = 0
     last_err = None
 
     while time.time() < deadline:
+        attempt += 1
         try:
-            conn = dbsql.connect(server_hostname=server, http_path=http_path, access_token=token)
-            # warm-up query to trigger auto-start if needed
+            print(f"[DBX] connect attempt {attempt} to {server} ({http})", flush=True)
+            conn = dbsql.connect(  # <-- this now matches the import above
+                server_hostname=server,
+                http_path=http,
+                access_token=token,
+            )
+            # sanity ping
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchall()
+            print("[DBX] connection OK", flush=True)
             return conn
         except Exception as e:
             last_err = e
-            print(f"[WARN] connect failed ({type(e).__name__}): {e}. Retrying in {delay}s...")
+            print(f"[DBX] connect failed ({type(e).__name__}): {e} — retry in {delay}s", flush=True)
             time.sleep(delay)
             delay = min(delay * 2, 30)
 
