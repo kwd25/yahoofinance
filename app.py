@@ -34,62 +34,79 @@ def _warehouse_start(server: str, token: str, wid: str) -> None:
     requests.post(url, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=15)
 
 @st.cache_resource(show_spinner=False)
-def ensure_warehouse_running(timeout_s: int = 300, poll_s: int = 5) -> str:
+def ensure_warehouse_running(silent: bool = True, ok_ttl_s: int = 300) -> str:
     """
-    Starts the warehouse if not running and waits until RUNNING (cached).
-    Returns the final state (RUNNING or whatever it ended up).
+    Starts the warehouse (if WAREHOUSE_ID is set) and returns final state.
+    Caches success for ok_ttl_s seconds to avoid re-checking every rerun.
+    When silent=True, no status bar is shown.
     """
-    if not (SERVER and TOKEN and WAREHOUSE_ID):
-        raise RuntimeError("Missing DATABRICKS_* secrets (SERVER / TOKEN / WAREHOUSE_ID).")
+    if not (SERVER and HTTP_PATH and TOKEN):
+        missing = [k for k, ok in [("SERVER", SERVER), ("HTTP_PATH", HTTP_PATH), ("TOKEN", TOKEN)] if not ok]
+        raise RuntimeError(f"Missing DATABRICKS secrets: {', '.join(missing)}")
 
-    with st.status("Checking SQL Warehouse…", expanded=False) as status:
+    # If no WAREHOUSE_ID, we can't start/inspect; just proceed (connection may still work).
+    if not WAREHOUSE_ID:
+        return "UNKNOWN"
+
+    # Throttle how often we re-check to keep the UI clean
+    now = time.time()
+    ok_until = st.session_state.get("_wh_ok_until", 0.0)
+    if now < ok_until:
+        return "RUNNING"
+
+    def _check_and_start():
         try:
             state = _warehouse_state(SERVER, TOKEN, WAREHOUSE_ID)
-        except Exception as e:
-            st.warning(f"Could not read warehouse state yet: {e}")
+        except Exception:
             state = ""
-
         if state != "RUNNING":
-            status.update(label=f"Starting warehouse (current: {state or 'UNKNOWN'})…", state="running")
-            try:
-                _warehouse_start(SERVER, TOKEN, WAREHOUSE_ID)
-            except Exception as e:
-                st.error(f"Failed to send start request: {e}")
-                raise
-
-            deadline = time.time() + timeout_s
+            _warehouse_start(SERVER, TOKEN, WAREHOUSE_ID)
+            deadline = time.time() + 300  # 5 min
             last = state
             while time.time() < deadline:
                 try:
                     state = _warehouse_state(SERVER, TOKEN, WAREHOUSE_ID)
-                except Exception as e:
+                except Exception:
                     state = ""
                 if state == "RUNNING":
                     break
-                if state != last:
-                    status.update(label=f"Waiting for RUNNING (state: {state or 'UNKNOWN'})…", state="running")
-                    last = state
-                time.sleep(poll_s)
+                time.sleep(5)
+        return state or "UNKNOWN"
 
-        if state != "RUNNING":
-            status.update(label=f"Warehouse not RUNNING (state: {state or 'UNKNOWN'})", state="error")
-            raise RuntimeError(f"Warehouse state is {state!r}, not RUNNING.")
+    if silent:
+        state = _check_and_start()
+    else:
+        # one-time visible status if you ever want it
+        with st.status("Checking SQL Warehouse…", expanded=False) as _status:
+            state = _check_and_start()
+            if state == "RUNNING":
+                _status.update(label="Warehouse is RUNNING", state="complete")
+            else:
+                _status.update(label=f"Warehouse not RUNNING (state: {state})", state="error")
 
-        status.update(label="Warehouse is RUNNING", state="complete")
-        return state
+    # cache the OK state for a short period so we don’t show any UI next rerun
+    if state == "RUNNING":
+        st.session_state["_wh_ok_until"] = time.time() + ok_ttl_s
+
+    if state != "RUNNING":
+        # We still raise so users see a clear error if warehouse failed to start
+        raise RuntimeError(f"Warehouse state is {state!r}, not RUNNING.")
+
+    return state
 
 def connect_dbsql():
-    """
-    Ensures the warehouse is RUNNING, then returns a live dbsql connection.
-    """
-    ensure_warehouse_running()
-    conn = dbsql.connect(
+    try:
+        ensure_warehouse_running(silent=True, ok_ttl_s=300)  # silent & cached
+    except Exception as e:
+        st.error(f"Databricks Warehouse check failed: {e}")
+        st.stop()
+
+    return dbsql.connect(
         server_hostname=_norm_server(SERVER),
         http_path=HTTP_PATH,
         access_token=TOKEN,
         _session_parameters={"catalog": CATALOG, "schema": SCHEMA},
     )
-    return conn
 
 @st.cache_data(show_spinner=False, ttl=60)
 def run_query(sql: str) -> pd.DataFrame:
