@@ -3,7 +3,7 @@ name: Ingest
 on:
   workflow_dispatch:
   schedule:
-    - cron: "45 1 * * 2-6"   # example: run after market close (adjust as you like)
+    - cron: "45 1 * * 2-6"   # run after market close 
 
 jobs:
   ingest:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]   # 4 shards -> set to [0..N-1] for N shards
+        shard: [0, 1, 2, 3]   
 
     steps:
       - uses: actions/checkout@v4
@@ -24,29 +24,38 @@ jobs:
 
       - name: Run ingest shard
         env:
-          # --- Databricks (use your existing secrets) ---
+          # --- Databricks ---
           DATABRICKS_SERVER:    ${{ secrets.DATABRICKS_SERVER }}
           DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
           DATABRICKS_TOKEN:     ${{ secrets.DATABRICKS_TOKEN }}
 
           # --- Symbol loading / sharding ---
           SYMBOL_SOURCE: "sp500"
-          # SP500_CSV: "data/sp500.csv"        # set if you commit a CSV fallback
           SHARDS: "4"
           SHARD_INDEX: "${{ matrix.shard }}"
-          MIN_SYMBOLS_SHARD: "80"             # guard: ~500/4 = ~125; pick a safe floor
+          MIN_SYMBOLS_SHARD: "80"             # guard: ~500/4 = ~125 a safe floor
 
           # --- Backfill window (one-time big run) ---
           BACKFILL_YEARS: "10"         
 
           # --- Performance knobs ---
-          WORKERS: "10"                       # per-runner threadpool for fetch()
-          FETCH_TIMEOUT: "90"                 # seconds per ticker (skip if stuck)
-          BATCH_ROWS: "5000"                  # rows per MERGE batch
+          WORKERS: "10"                       
+          FETCH_TIMEOUT: "90"                 
+          BATCH_ROWS: "5000"                  
 
-          # --- Logging (optional) ---
+          # --- Logging ---
           DEBUG: "0"
           VALIDATE_ONLY: "0"
 
         run: |
           python ingest.py
+
+
+      - name: Run preprocessing (Silver + Gold)
+        if: ${{ matrix.shard == 0 }}     
+        env:
+          DATABRICKS_SERVER:    ${{ secrets.DATABRICKS_SERVER }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN:     ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          python preprocess.py
