@@ -168,32 +168,70 @@ def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
-    try:
-        df = yf.download(symbol, start=start, end=end, interval="1d", auto_adjust=False, progress=False)
-    except Exception as e:
-        print(f"[WARN] fetch fail {symbol}: {e}")
-        return pd.DataFrame()
-    if df is None or df.empty:
-        return pd.DataFrame()
-    df = df.reset_index()
-    df = _flatten_columns(df)
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"]).dt.date.astype(str)
-    # handle yfinance column oddities
-    rename_map = {"adj close": "adj_close"}
-    for k in list(df.columns):
-        if k.startswith("adj close"):
-            rename_map[k] = "adj_close"
-    df = df.rename(columns=rename_map)
-    for c in ["open","high","low","close","adj_close","volume"]:
-        if c not in df.columns:
-            df[c] = pd.NA
-    df = df[["date","open","high","low","close","adj_close","volume"]]
-    df["symbol"] = symbol
-    df = df[["symbol","date","open","high","low","close","adj_close","volume"]]
-    df = df[~df["close"].isna()]
-    return df
+    import pandas as pd
+    import yfinance as yf
 
+    try:
+        df = yf.download(
+            symbol,
+            start=start,
+            end=end,
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="column",   # <- avoid MultiIndex columns
+            threads=False        # <- slightly slower, fewer oddities
+        )
+    except Exception as e:
+        print(f"[WARN] {symbol} exception in download: {e}")
+        return pd.DataFrame()
+
+    # Empty or None -> skip
+    if df is None or df.empty:
+        print(f"[WARN] {symbol} returned empty frame")
+        return pd.DataFrame()
+
+    # If MultiIndex columns slipped through, flatten by top level
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # Standardize column names to lowercase
+    df = df.reset_index()
+    rename_map = {
+        "Date": "date",
+        "Open": "open",
+        "High": "high",
+        "Low": "low",
+        "Close": "close",
+        "Adj Close": "adj_close",
+        "AdjClose": "adj_close",
+        "Adj_Close": "adj_close",
+        "Volume": "volume",
+    }
+    df = df.rename(columns={**rename_map, **{k.lower(): v for k, v in rename_map.items() if k.lower() in df.columns}})
+
+    # Ensure we have the expected columns; create missing as None
+    expected = ["date", "open", "high", "low", "close", "adj_close", "volume"]
+    for c in expected:
+        if c not in df.columns:
+            df[c] = None
+
+    # Force date to ISO date string (YYYY-MM-DD)
+    try:
+        df["date"] = pd.to_datetime(df["date"]).dt.date.astype(str)
+    except Exception as e:
+        print(f"[WARN] {symbol} could not parse 'date' column: {e}")
+        return pd.DataFrame()
+
+    df["symbol"] = symbol
+
+    # Final select in correct order
+    df = df[["symbol", "date", "open", "high", "low", "close", "adj_close", "volume"]]
+
+    # Optional: small sanity filter to drop fully-null price rows
+    df = df[~(df[["open", "high", "low", "close", "adj_close", "volume"]].isna().all(axis=1))]
+
+    return df
 def fetch_with_timeout(symbol, start, end):
     with ThreadPoolExecutor(max_workers=1) as ex:
         fut = ex.submit(fetch, symbol, start, end)
@@ -243,6 +281,11 @@ WHEN NOT MATCHED THEN INSERT
 # === Main ===
 def main():
     with connect() as conn, conn.cursor() as cur:
+        cur.execute(f"USE CATALOG {CATALOG}")
+        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
+        cur.execute(f"USE SCHEMA {CATALOG}.{SCHEMA}")
+        ctx = cur.fetchone() if False else None
+        print(f"CTX: Row(current_catalog()='{CATALOG}', current_schema()='{SCHEMA}', current_user()='{os.getenv('GITHUB_ACTOR','local')}')")
         cur.execute("SELECT current_catalog(), current_schema(), current_user()")
         print("CTX:", cur.fetchone())
 
@@ -273,7 +316,6 @@ def main():
                 print(f"[DATA] {s}: {r[0]} → {r[1]} ({r[2]} rows)")
             return df
 
-        # parallel fetch
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             futs = {pool.submit(fetch_one, s): s for s in syms}
             i, n = 0, len(futs)
@@ -290,21 +332,45 @@ def main():
             print("No rows to upsert.")
         else:
             all_df = pd.concat(frames, ignore_index=True)
-            all_df = all_df[["symbol","date","open","high","low","close","adj_close","volume"]]
-            rows = list(map(tuple, all_df.itertuples(index=False, name=None)))
 
-            print(f"[DEBUG] fetched_rows_total={total_rows}")
-            print(f"[DEBUG] values_rows_prepared={len(rows)}")
+            # ==== PRE-MERGE VALIDATION (added) ====
+            expected = ["symbol","date","open","high","low","close","adj_close","volume"]
+            for c in expected:
+                if c not in all_df.columns:
+                    all_df[c] = None
+            # drop rows where all price/volume fields are null
+            null_mask = all_df[["open","high","low","close","adj_close","volume"]].isna().all(axis=1)
+            dropped = int(null_mask.sum())
+            if dropped > 0:
+                print(f"[WARN] dropping {dropped} fully-null price rows before merge")
+                all_df = all_df.loc[~null_mask]
+            if all_df.empty:
+                print("No rows to upsert after cleaning.")
+            else:
+                # enforce column order
+                all_df = all_df[["symbol","date","open","high","low","close","adj_close","volume"]]
 
-            for i in range(0, len(rows), BATCH_ROWS):
-                if i == 0 and rows:
-                    # show first tuple preview
-                    preview = rows[0]
-                    p = (preview[0], preview[1]) + tuple(
-                        (None if (isinstance(x, float) and math.isnan(x)) else x) for x in preview[2:]
-                    )
-                    print("[MERGE] first_tuple:\n", f"('{p[0]}','{p[1]}',{p[2] if p[2] is not None else 'NULL'},{p[3] if p[3] is not None else 'NULL'},{p[4] if p[4] is not None else 'NULL'},{p[5] if p[5] is not None else 'NULL'},{p[6] if p[6] is not None else 'NULL'},{p[7] if p[7] is not None else 'NULL'},current_timestamp())")
-                merge_batch(cur, rows[i:i+BATCH_ROWS])
+                # optional peek
+                try:
+                    print("[DEBUG] sample rows post-clean:")
+                    print(all_df.head(3).to_string(index=False))
+                except Exception:
+                    pass
+                # =====================================
+
+                rows = list(map(tuple, all_df.itertuples(index=False, name=None)))
+
+                print(f"[DEBUG] fetched_rows_total={total_rows}")
+                print(f"[DEBUG] values_rows_prepared={len(rows)}")
+
+                for i in range(0, len(rows), BATCH_ROWS):
+                    if i == 0 and rows:
+                        preview = rows[0]
+                        p = (preview[0], preview[1]) + tuple(
+                            (None if (isinstance(x, float) and math.isnan(x)) else x) for x in preview[2:]
+                        )
+                        print("[MERGE] first_tuple:\n", f"('{p[0]}','{p[1]}',{p[2] if p[2] is not None else 'NULL'},{p[3] if p[3] is not None else 'NULL'},{p[4] if p[4] is not None else 'NULL'},{p[5] if p[5] is not None else 'NULL'},{p[6] if p[6] is not None else 'NULL'},{p[7] if p[7] is not None else 'NULL'},current_timestamp())")
+                    merge_batch(cur, rows[i:i+BATCH_ROWS])
 
         cur.execute(f"SELECT COUNT(1), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
         after = cur.fetchone()
