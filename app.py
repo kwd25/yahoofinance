@@ -46,11 +46,12 @@ with tabs[0]:
         This leaderboard highlights the **15 strongest momentum performers** in the S&P 500 over the past 20 trading days.  
         A high momentum percentage suggests recent outperformance, often signaling short-term strength or speculative attention.  
         Traders can use this view to quickly identify which stocks are *leading* or *lagging* the current market trend.
-        """
         **Feature Definitions**
-        - **20-Day Momentum (mom_20d)**: Measures a stock percentage price change compared to 20 trading days ago.
-        - **Volatility (vol_20d)**: Reflects how much a stock price fluctuates over the same 20 day window, scaled to an annual rate.
+        - **20-Day Momentum (mom_20d)**: Measures a stock's percentage price change compared to 20 trading days ago.
+        - **Volatility (vol_20d)**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.
         - **SMA (Simple Moving Average)**: The average closing price over a specific number of days (here, 20 and 50).
+        """
+        
     )
 
     q1 = f"""
