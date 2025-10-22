@@ -6,18 +6,18 @@ import databricks.sql as dbsql
 # -----------------------
 # Databricks connection
 # -----------------------
-@st.cache_resource
-def get_connection():
-    return dbsql.connect(
+def run_query(sql: str) -> pd.DataFrame:
+    """Run Databricks SQL safely (open connection per query)."""
+    with dbsql.connect(
         server_hostname=os.environ["DATABRICKS_SERVER"],
         http_path=os.environ["DATABRICKS_HTTP_PATH"],
         access_token=os.environ["DATABRICKS_TOKEN"]
-    )
-
-@st.cache_data(ttl=600)
-def run_query(sql: str) -> pd.DataFrame:
-    with get_connection() as conn:
-        return pd.read_sql(sql, conn)
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            cols = [desc[0] for desc in cur.description]
+            rows = cur.fetchall()
+            return pd.DataFrame(rows, columns=cols)
 
 CATALOG = "workspace"
 SCHEMA = "yahoo"
