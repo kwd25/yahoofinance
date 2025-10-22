@@ -282,13 +282,36 @@ def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
             df = df.rename(columns={"index": "date"})
     return df
 
+def connect_with_retry(max_seconds: int = 600, first_sleep: int = 5):
+    server = os.environ["DATABRICKS_SERVER"].replace("https://","").replace("http://","").strip("/")
+    http_path = os.environ["DATABRICKS_HTTP_PATH"]
+    token = os.environ["DATABRICKS_TOKEN"]
+
+    delay = first_sleep
+    deadline = time.time() + max_seconds
+    last_err = None
+
+    while time.time() < deadline:
+        try:
+            conn = dbsql.connect(server_hostname=server, http_path=http_path, access_token=token)
+            # warm-up query to trigger auto-start if needed
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchall()
+            return conn
+        except Exception as e:
+            last_err = e
+            print(f"[WARN] connect failed ({type(e).__name__}): {e}. Retrying in {delay}s...")
+            time.sleep(delay)
+            delay = min(delay * 2, 30)
+
+    raise RuntimeError(f"Could not connect to Databricks within {max_seconds}s") from last_err
+
 
 
 def main():
-    with sql.connect(server_hostname=DATABRICKS_SERVER,
-                     http_path=DATABRICKS_HTTP_PATH,
-                     access_token=DATABRICKS_TOKEN) as conn:
-        with conn.cursor() as cur:
+    with connect_with_retry() as conn, conn.cursor() as cur:
+
             ensure_table(cur)
             debug_where_am_i(cur)
             start, end, mode = plan_date_window(cur)
