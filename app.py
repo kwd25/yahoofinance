@@ -95,19 +95,109 @@ with tabs[0]:
 # Momentum vs Volatility
 # -----------------------
 with tabs[1]:
-    st.subheader("Momentum vs Volatility (Current Snapshot)")
+    st.subheader("Momentum vs. Volatility — Market Snapshot")
 
+    st.markdown(
+        """
+        This scatter plot compares each stock's **20-day momentum** (recent performance) and **annualized volatility** (risk).  
+        Each dot represents one S&P 500 stock as of the most recent trading day.  
+
+        The **x-axis (Volatility)** measures how much a stock’s price fluctuates. Lower volatility = steadier performance.  
+        The **y-axis (Momentum)** shows the recent 20-day percentage gain or loss. Higher = stronger short-term trend.  
+
+        **Interpretation**  
+        **High Momentum, Low Volatility:** “Steady Winners” — consistent strength with manageable risk.  
+        **High Momentum, High Volatility:** “Hot Movers” — big gainers, but higher risk.  
+        **Low Momentum, Low Volatility:** “Stable/Neutral” — low excitement, steady.  
+        **Low Momentum, High Volatility:** “Falling/Choppy” — underperformers or volatile corrections.  
+        """
+    )
+
+    # Query for latest snapshot
     q2 = f"""
     WITH mx AS (SELECT CAST(MAX(date) AS DATE) AS d FROM {CATALOG}.{SCHEMA}.gold_features)
-    SELECT symbol, mom_20d, vol_20d
+    SELECT symbol, mom_20d * 100 AS mom_20d_pct, vol_20d, close
     FROM {CATALOG}.{SCHEMA}.gold_features g
     JOIN mx ON CAST(g.date AS DATE) = mx.d
     WHERE mom_20d IS NOT NULL AND vol_20d IS NOT NULL
+    ORDER BY mom_20d DESC
     """
     df2 = run_query(q2)
 
-    st.scatter_chart(df2, x="vol_20d", y="mom_20d", color=None, size=None, height=400)
-    st.dataframe(df2, use_container_width=True)
+    # Compute median lines for the compass
+    mom_med = df2["mom_20d_pct"].median()
+    vol_med = df2["vol_20d"].median()
+
+    # Main scatter chart
+    base = alt.Chart(df2).encode(
+        x=alt.X("vol_20d:Q", title="Volatility (Annualized)", scale=alt.Scale(zero=False)),
+        y=alt.Y("mom_20d_pct:Q", title="20-Day Momentum (%)"),
+        tooltip=[
+            alt.Tooltip("symbol", title="Symbol"),
+            alt.Tooltip("mom_20d_pct:Q", title="20-Day Momentum (%)", format=".2f"),
+            alt.Tooltip("vol_20d:Q", title="Volatility (Annualized)", format=".2f"),
+            alt.Tooltip("close:Q", title="Close Price ($)", format=".2f"),
+        ],
+    )
+
+    scatter = base.mark_circle(size=80, color="steelblue", opacity=0.7)
+
+    # Add quadrant "compass" lines
+    vline = (
+        alt.Chart(pd.DataFrame({"x": [vol_med]}))
+        .mark_rule(color="gray", strokeDash=[5, 5])
+        .encode(x="x:Q")
+    )
+    hline = (
+        alt.Chart(pd.DataFrame({"y": [mom_med]}))
+        .mark_rule(color="gray", strokeDash=[5, 5])
+        .encode(y="y:Q")
+    )
+
+    # Add quadrant labels
+    labels = pd.DataFrame([
+        {"vol_20d": vol_med * 0.6, "mom_20d_pct": mom_med * 1.6, "label": "📈 Steady Winners"},
+        {"vol_20d": vol_med * 1.6, "mom_20d_pct": mom_med * 1.6, "label": "⚡ Hot Movers"},
+        {"vol_20d": vol_med * 0.6, "mom_20d_pct": mom_med * 0.4, "label": "💤 Stable/Neutral"},
+        {"vol_20d": vol_med * 1.6, "mom_20d_pct": mom_med * 0.4, "label": "📉 Falling/Choppy"},
+    ])
+
+    text = alt.Chart(labels).mark_text(
+        align="center", baseline="middle", fontSize=13, fontWeight="bold", color="gray"
+    ).encode(x="vol_20d:Q", y="mom_20d_pct:Q", text="label")
+
+    # Combine layers
+    chart = (scatter + vline + hline + text).properties(
+        height=550,
+        width="container",
+        title="Momentum vs Volatility (20-Day Snapshot)"
+    )
+
+    st.altair_chart(chart, use_container_width=True)
+
+    # --- Data table ---
+    st.dataframe(
+        df2.rename(
+            columns={
+                "symbol": "Symbol",
+                "mom_20d_pct": "20-Day Momentum (%)",
+                "vol_20d": "Volatility (Annualized)",
+                "close": "Close Price ($)",
+            }
+        ).sort_values("20-Day Momentum (%)", ascending=False),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # --- Footer description ---
+    st.markdown(
+        """
+        **Feature Notes**  
+        - **Momentum (mom_20d)** captures short-term price trends.  
+        - **Volatility (vol_20d)** measures recent price variability scaled to a one-year equivalent.  
+        - Comparing both reveals whether high performers are *stable leaders* or *high-risk movers*.  
+        """
+    )
 
 # -----------------------
 # Price vs SMA
