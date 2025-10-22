@@ -88,8 +88,8 @@ with tabs[0]:
         hide_index=True,
     )
     st.markdown("""**Feature Definitions:**  
-        **20-Day Momentum (mom_20d)**: Measures a stock's percentage price change compared to 20 trading days ago.  
-        **Volatility (vol_20d)**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.  
+        **20-Day Momentum**: Measures a stock's percentage price change compared to 20 trading days ago.  
+        **Volatility**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.  
         **Close Price** The closing price of the stock today.""")
 # -----------------------
 # Momentum vs Volatility
