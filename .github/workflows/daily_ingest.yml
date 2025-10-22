@@ -22,6 +22,35 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance pandas requests lxml databricks-sql-connector
 
+      - name: Start & wait for SQL Warehouse
+        env:
+          DATABRICKS_SERVER:       ${{ secrets.DATABRICKS_SERVER }}
+          DATABRICKS_TOKEN:        ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+        run: |
+          set -e
+          SERVER="${DATABRICKS_SERVER#https://}"; SERVER="${SERVER#http://}"; SERVER="${SERVER%%/}"
+
+          echo "Starting warehouse ${DATABRICKS_WAREHOUSE_ID}..."
+          curl -fsS -X POST -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+            "https://${SERVER}/api/2.0/sql/warehouses/${DATABRICKS_WAREHOUSE_ID}/start" || true
+
+          echo "Waiting for RUNNING..."
+          for i in $(seq 1 60); do
+            STATE=$(curl -fsS -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+              "https://${SERVER}/api/2.0/sql/warehouses/${DATABRICKS_WAREHOUSE_ID}" | \
+              python - <<'PY'import sys, json; print(json.load(sys.stdin).get("state","").upper())PY)
+            echo "State: ${STATE}"
+            if [ "$STATE" = "RUNNING" ]; then
+              echo "Warehouse is RUNNING."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for RUNNING."
+          exit 1
+
+
       - name: Run ingest shard
         env:
           # --- Databricks ---
