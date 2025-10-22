@@ -87,7 +87,7 @@ with tabs[0]:
         use_container_width=True,
         hide_index=True,
     )
-    st.markdown("""**Feature Definitions:**  
+    st.markdown("""**Feature Notes:**  
         **20-Day Momentum**: Measures a stock's percentage price change compared to 20 trading days ago.  
         **Volatility**: Reflects how much a stock's price fluctuates over the same 20 day window, scaled to an annual rate.  
         **Close Price** The closing price of the stock today.""")
@@ -181,10 +181,10 @@ with tabs[1]:
     # --- Footer description ---
     st.markdown(
         """
-        **Feature Notes**  
-        - **Momentum (mom_20d)** captures short-term price trends.  
-        - **Volatility (vol_20d)** measures recent price variability scaled to a one-year equivalent.  
-        - Comparing both reveals whether high performers are *stable leaders* or *high-risk movers*.  
+        **Feature Notes:**  
+        **Momentum (mom_20d)** captures short-term price trends.  
+        **Volatility (vol_20d)** measures recent price variability scaled to a one-year equivalent.  
+        Comparing both reveals whether high performers are *stable leaders* or *high-risk movers*.  
         """
     )
 
