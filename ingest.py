@@ -3,6 +3,7 @@ from datetime import datetime, date, timedelta
 import pandas as pd
 import yfinance as yf
 from databricks import sql
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
 
 # -----------------------
 # Config
@@ -110,6 +111,19 @@ def env_int(name: str, default: int) -> int:
 
 FORCE_RELOAD_DAYS = env_int("FORCE_RELOAD_DAYS", 1)  # 0 = disabled
 
+FETCH_TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "90"))  # seconds
+
+def fetch_with_timeout(symbol, start, end):
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fetch, symbol, start, end)
+        try:
+            return fut.result(timeout=FETCH_TIMEOUT)
+        except FutTimeout:
+            print(f"[TIMEOUT] {symbol} fetch exceeded {FETCH_TIMEOUT}s, skipping")
+            return pd.DataFrame()
+        except Exception as e:
+            print(f"[WARN] {symbol} fetch exception: {e}")
+            return pd.DataFrame()
 
 
 DATABRICKS_SERVER    = os.environ["DATABRICKS_SERVER"]
@@ -328,7 +342,7 @@ def main():
 
             frames, failed = [], []
             for s in SYMS:
-                df = fetch(s, start, end)
+                df = fetch_with_timeout(s, start, end)
 
                 # === paste these debug prints right here ===
                 try:
