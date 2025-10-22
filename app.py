@@ -39,22 +39,40 @@ tabs = st.tabs([
 # Momentum Leaderboard
 # -----------------------
 with tabs[0]:
-    st.subheader("Top 20 Stocks by 20-Day Momentum")
+    st.subheader("Momentum Leaderboard — Top 15 Stocks")
+    st.markdown(
+        """
+        **Chart Interpretation**
+        This leaderboard highlights the **15 strongest momentum performers** in the S&P 500 over the past 20 trading days.  
+        A high momentum percentage suggests recent outperformance, often signaling short-term strength or speculative attention.  
+        Traders can use this view to quickly identify which stocks are *leading* or *lagging* the current market trend.
+        """
+        **Feature Definitions**
+        - **20-Day Momentum (mom_20d)**: Measures a stock’s percentage price change compared to 20 trading days ago.
+        - **Volatility (vol_20d)**: Reflects how much a stock’s price fluctuates over the same 20-day window, scaled to an annual rate.
+        - **SMA (Simple Moving Average)**: The average closing price over a specific number of days (here, 20 and 50).
+    )
 
     q1 = f"""
     WITH mx AS (SELECT CAST(MAX(date) AS DATE) AS d FROM {CATALOG}.{SCHEMA}.gold_features)
-    SELECT symbol, mom_20d, vol_20d, close, sma_50
+    SELECT symbol, mom_20d * 100 AS mom_20d_pct, vol_20d, close
     FROM {CATALOG}.{SCHEMA}.gold_features g
     JOIN mx ON CAST(g.date AS DATE) = mx.d
     WHERE mom_20d IS NOT NULL
     ORDER BY mom_20d DESC
-    LIMIT 20
+    LIMIT 15
     """
     df1 = run_query(q1)
-    st.bar_chart(df1, x="symbol", y="mom_20d", height=400)
 
-    st.dataframe(df1, use_container_width=True)
+    st.markdown("### 📊 Top 15 Stocks by 20-Day Momentum")
+    st.bar_chart(
+        df1.set_index("symbol")["mom_20d_pct"].sort_values(),
+        height=500,
+        use_container_width=True
+    )
 
+    st.caption("**X-axis:** 20-Day Momentum (%) | **Y-axis:** Stock Symbol")
+    st.dataframe(df1.rename(columns={"mom_20d_pct": "20-Day Momentum (%)"}), use_container_width=True)
 # -----------------------
 # Momentum vs Volatility
 # -----------------------
