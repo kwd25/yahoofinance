@@ -195,7 +195,8 @@ with tabs[2]:
     st.subheader("Price vs. Moving Averages, 30-Day Trend")
 
     st.markdown(
-        """This visualization shows how a selected stock’s **closing price** compares to its **20-day** and **50-day Simple Moving Averages (SMAs)** over the past 30 trading days.  
+        """
+        This visualization shows how a selected stock’s **closing price** compares to its **20-day** and **50-day Simple Moving Averages (SMAs)** over the past 30 trading days.  
 
         **Closing Price** represents the daily market close.  
         **SMA (Simple Moving Average)** smooths fluctuations to reveal underlying trends.  
