@@ -7,21 +7,94 @@ import altair as alt
 # -----------------------
 # Databricks connection
 # -----------------------
-def run_query(sql: str) -> pd.DataFrame:
-    """Run Databricks SQL safely (open connection per query)."""
-    with dbsql.connect(
-        server_hostname=os.environ["DATABRICKS_SERVER"],
-        http_path=os.environ["DATABRICKS_HTTP_PATH"],
-        access_token=os.environ["DATABRICKS_TOKEN"]
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            cols = [desc[0] for desc in cur.description]
-            rows = cur.fetchall()
-            return pd.DataFrame(rows, columns=cols)
+import os, time, requests, pandas as pd
+import streamlit as st
+import databricks.sql as dbsql
 
+# --- Load settings from secrets (with env fallback) ---
+SERVER = os.getenv("DATABRICKS_SERVER", st.secrets.get("DATABRICKS_SERVER", ""))
+HTTP_PATH = os.getenv("DATABRICKS_HTTP_PATH", st.secrets.get("DATABRICKS_HTTP_PATH", ""))
+TOKEN = os.getenv("DATABRICKS_TOKEN", st.secrets.get("DATABRICKS_TOKEN", ""))
+WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", st.secrets.get("DATABRICKS_WAREHOUSE_ID", ""))
 CATALOG = "workspace"
 SCHEMA = "yahoo"
+
+def _norm_server(host: str) -> str:
+    return host.replace("https://","").replace("http://","").strip("/")
+
+def _warehouse_state(server: str, token: str, wid: str) -> str:
+    url = f"https://{_norm_server(server)}/api/2.0/sql/warehouses/{wid}"
+    r = requests.get(url, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=15)
+    r.raise_for_status()
+    return (r.json().get("state") or "").upper()
+
+def _warehouse_start(server: str, token: str, wid: str) -> None:
+    url = f"https://{_norm_server(server)}/api/2.0/sql/warehouses/{wid}/start"
+    # POST may 409 if already starting; that's fine.
+    requests.post(url, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=15)
+
+@st.cache_resource(show_spinner=False)
+def ensure_warehouse_running(timeout_s: int = 300, poll_s: int = 5) -> str:
+    """
+    Starts the warehouse if not running and waits until RUNNING (cached).
+    Returns the final state (RUNNING or whatever it ended up).
+    """
+    if not (SERVER and TOKEN and WAREHOUSE_ID):
+        raise RuntimeError("Missing DATABRICKS_* secrets (SERVER / TOKEN / WAREHOUSE_ID).")
+
+    with st.status("Checking SQL Warehouse…", expanded=False) as status:
+        try:
+            state = _warehouse_state(SERVER, TOKEN, WAREHOUSE_ID)
+        except Exception as e:
+            st.warning(f"Could not read warehouse state yet: {e}")
+            state = ""
+
+        if state != "RUNNING":
+            status.update(label=f"Starting warehouse (current: {state or 'UNKNOWN'})…", state="running")
+            try:
+                _warehouse_start(SERVER, TOKEN, WAREHOUSE_ID)
+            except Exception as e:
+                st.error(f"Failed to send start request: {e}")
+                raise
+
+            deadline = time.time() + timeout_s
+            last = state
+            while time.time() < deadline:
+                try:
+                    state = _warehouse_state(SERVER, TOKEN, WAREHOUSE_ID)
+                except Exception as e:
+                    state = ""
+                if state == "RUNNING":
+                    break
+                if state != last:
+                    status.update(label=f"Waiting for RUNNING (state: {state or 'UNKNOWN'})…", state="running")
+                    last = state
+                time.sleep(poll_s)
+
+        if state != "RUNNING":
+            status.update(label=f"Warehouse not RUNNING (state: {state or 'UNKNOWN'})", state="error")
+            raise RuntimeError(f"Warehouse state is {state!r}, not RUNNING.")
+
+        status.update(label="Warehouse is RUNNING", state="complete")
+        return state
+
+def connect_dbsql():
+    """
+    Ensures the warehouse is RUNNING, then returns a live dbsql connection.
+    """
+    ensure_warehouse_running()
+    conn = dbsql.connect(
+        server_hostname=_norm_server(SERVER),
+        http_path=HTTP_PATH,
+        access_token=TOKEN,
+        _session_parameters={"catalog": CATALOG, "schema": SCHEMA},
+    )
+    return conn
+
+@st.cache_data(show_spinner=False, ttl=60)
+def run_query(sql: str) -> pd.DataFrame:
+    with connect_dbsql() as conn, conn.cursor() as cur:
+        return pd.read_sql(sql, conn)
 
 # -----------------------
 # Streamlit layout
