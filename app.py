@@ -240,7 +240,7 @@ with tabs[2]:
         .mark_line(strokeWidth=2)
         .encode(
             x=alt.X("date:T", title="Date"),
-            y=alt.Y("Price:Q", title="Price ($)"),
+            y=alt.Y("Price:Q",title="Price ($)",scale=alt.Scale(domain=[df_long["Price"].min() * 0.98, df_long["Price"].max() * 1.02],nice=False)),
             color=alt.Color(
                 "Series:N",
                 title="Line Type",
