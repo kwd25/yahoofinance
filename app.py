@@ -28,7 +28,7 @@ SCHEMA = "yahoo"
 # -----------------------
 st.set_page_config(page_title="Market Momentum Dashboard", layout="wide")
 st.title("Market Momentum Dashboard")
-st.caption("Live S&P 500 data pipeline — Bronze → Silver → Gold → Visualization")
+st.caption("Fed by a daily batch S&P 500 data pipeline. Currently only 339 fully backfilled symbols (patch later).")
 
 tabs = st.tabs([
     "Momentum Leaderboard",
