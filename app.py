@@ -192,7 +192,7 @@ with tabs[1]:
 # Price vs SMA
 # -----------------------
 with tabs[2]:
-    st.subheader("Price vs. Moving Averages, 10-Day Trend")
+    st.subheader("Price vs. Moving Averages, 30-Day Trend")
 
     st.markdown(
         """
@@ -206,7 +206,7 @@ with tabs[2]:
     symbols = run_query(f"SELECT DISTINCT symbol FROM {CATALOG}.{SCHEMA}.gold_features ORDER BY symbol")
     selected_symbol = st.selectbox("Select a stock symbol:", symbols["symbol"].tolist(), index=0)
 
-    # Query 10-day lookback
+    # Query 30-day lookback
     q3 = f"""
     WITH mx AS (SELECT CAST(MAX(date) AS DATE) AS d FROM {CATALOG}.{SCHEMA}.gold_features)
     SELECT
@@ -216,7 +216,7 @@ with tabs[2]:
       g.sma_50
     FROM {CATALOG}.{SCHEMA}.gold_features g, mx
     WHERE g.symbol = '{selected_symbol}'
-      AND CAST(g.date AS DATE) >= date_sub(mx.d, 10)
+      AND CAST(g.date AS DATE) >= date_sub(mx.d, 30)
     ORDER BY date
     """
     df3 = run_query(q3)
@@ -247,7 +247,7 @@ with tabs[2]:
         .properties(
             height=500,
             width="container",
-            title=f"{selected_symbol}: Price vs. 20 & 50-Day SMAs (Last 10 Days)"
+            title=f"{selected_symbol}: Price vs. 20 & 50-Day SMAs (Last 30 Days)"
         )
         .configure_legend(labelFontSize=12, titleFontSize=13)
     )
