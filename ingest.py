@@ -1,117 +1,198 @@
-import os
-from datetime import datetime, date, timedelta
+#!/usr/bin/env python3
+
+# === Imports ===
+import os, math
+from datetime import date, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
 import pandas as pd
 import yfinance as yf
-from databricks import sql
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
+import databricks.sql as dbsql
 
-# -----------------------
-# Config
-# -----------------------
-CATALOG = os.getenv("CATALOG", "workspace")
-SCHEMA = os.getenv("SCHEMA", "yahoo")
-TABLE = os.getenv("BRONZE_TABLE", "bronze_prices")
+# === Config (env) ===
+CATALOG  = os.getenv("CATALOG", "workspace")
+SCHEMA   = os.getenv("SCHEMA",  "yahoo")
+TABLE    = os.getenv("TABLE",   "bronze_prices")
 
-def env_int(name: str, default: int) -> int:
-    v = os.getenv(name, "")
+SERVER   = os.environ["DATABRICKS_SERVER"]
+HTTPPATH = os.environ["DATABRICKS_HTTP_PATH"]
+TOKEN    = os.environ["DATABRICKS_TOKEN"]
+
+# Window: choose ONE (prefer BACKFILL_YEARS for big runs)
+BACKFILL_YEARS    = int(os.getenv("BACKFILL_YEARS", "0"))
+FORCE_RELOAD_DAYS = int(os.getenv("FORCE_RELOAD_DAYS", "10"))
+
+# Performance / resilience
+WORKERS       = int(os.getenv("WORKERS", "8"))
+FETCH_TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "90"))
+BATCH_ROWS    = int(os.getenv("BATCH_ROWS", "5000"))
+
+# Symbols
+SP500_CSV  = os.getenv("SP500_CSV", "data/sp500.csv")
+INCLUDE_FILE = os.getenv("INCLUDE_SYMBOLS_FILE", "")
+SYMBOL_LIMIT = int(os.getenv("SYMBOL_LIMIT", "0"))
+MIN_SYMBOLS  = int(os.getenv("MIN_SYMBOLS", "0"))
+
+# Sharding
+SHARDS      = int(os.getenv("SHARDS", "1"))
+SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))
+MIN_SYMBOLS_SHARD = int(os.getenv("MIN_SYMBOLS_SHARD", "0"))
+
+# Smart backfill for short-history symbols
+SMART_BACKFILL = os.getenv("SMART_BACKFILL", "1") == "1"
+SMART_MIN_ROWS = int(os.getenv("SMART_MIN_ROWS", "2520"))  # ~10y
+
+# === DB helpers ===
+def connect():
+    return dbsql.connect(
+        server_hostname=SERVER,
+        http_path=HTTPPATH,
+        access_token=TOKEN,
+    )
+
+def exec_one(cur, sql):
+    cur.execute(sql)
     try:
-        return int(v)
-    except (TypeError, ValueError):
-        return default
+        row = cur.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
 
-def env_list(name: str, default_csv: str) -> list[str]:
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        raw = default_csv
-    return [s.strip().upper() for s in raw.split(",") if s.strip()]
+def qfmt(s):  # single-quote escape
+    return s.replace("'", "''")
 
-
-def _normalize_yahoo_symbol(s: str) -> str:
-    return s.strip().upper().replace('.', '-')  # e.g. BRK.B -> BRK-B
+# === Symbols ===
+def _norm_symbol(s: str) -> str:
+    return s.strip().upper().replace(".", "-")
 
 def load_symbols() -> list[str]:
-    """
-    Priority:
-      1) local CSV (repo)   -> data/sp500.csv (stable, no network)
-      2) yfinance helper    -> yf.tickers_sp500()
-      3) Wikipedia scrape   -> requests + read_html (with UA)
-      4) tiny fallback list
-    Optional cap via SYMBOL_LIMIT. Gate via MIN_SYMBOLS to avoid tiny runs.
-    """
-    symbols: list[str] = []
+    syms: list[str] = []
 
-    # 1) repo CSV (best: deterministic, no 403)
-    csv_path = os.getenv("SP500_CSV", "data/sp500.csv")
+    # 1) CSV (deterministic)
     try:
-        df = pd.read_csv(csv_path)
+        df = pd.read_csv(SP500_CSV)
         col = next((c for c in df.columns if c.lower().startswith("symbol")), df.columns[0])
-        symbols = [_normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str)]
-        print(f"[SYMS] Loaded {len(symbols)} from CSV: {csv_path}")
+        syms = [_norm_symbol(x) for x in df[col].dropna().astype(str)]
+        print(f"[SYMS] Loaded {len(syms)} from CSV")
     except Exception as e:
-        print(f"[WARN] Could not load {csv_path}: {e}")
+        print(f"[WARN] CSV load failed: {e}")
 
-    # 2) yfinance helper (often works; no lxml required)
-    if not symbols:
+    # 2) yfinance.tickers_sp500 
+    if not syms:
         try:
-            import yfinance as yf
-            raw = yf.tickers_sp500()
-            symbols = [_normalize_yahoo_symbol(x) for x in raw] if raw else []
-            if symbols:
-                print(f"[SYMS] Loaded {len(symbols)} from yfinance.tickers_sp500()")
+            lst = getattr(yf, "tickers_sp500", None)
+            if callable(lst):
+                raw = lst()
+                syms = [_norm_symbol(x) for x in raw] if raw else []
+                if syms:
+                    print(f"[SYMS] Loaded {len(syms)} from yfinance.tickers_sp500()")
         except Exception as e:
             print(f"[WARN] yfinance.tickers_sp500 failed: {e}")
 
-    # 3) Wikipedia with headers (403-safe most of the time; needs requests)
-    if not symbols:
+    # 3) Wikipedia (HTTP + read_html)
+    if not syms:
         try:
             import requests
             headers = {"User-Agent": "Mozilla/5.0 (ingest-bot)"}
-            url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-            html = requests.get(url, headers=headers, timeout=20).text
-            tables = pd.read_html(html)  # needs lxml or html5lib
+            html = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+                                headers=headers, timeout=20).text
+            tables = pd.read_html(html)
             df = tables[0]
             col = "Symbol" if "Symbol" in df.columns else df.columns[0]
-            symbols = [_normalize_yahoo_symbol(x) for x in df[col].dropna().astype(str)]
-            if symbols:
-                print(f"[SYMS] Loaded {len(symbols)} from Wikipedia")
+            syms = [_norm_symbol(x) for x in df[col].dropna().astype(str)]
+            print(f"[SYMS] Loaded {len(syms)} from Wikipedia")
         except Exception as e:
             print(f"[WARN] Wikipedia scrape failed: {e}")
 
-    # 4) last-resort small list
-    if not symbols:
-        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
-        print("[SYMS] Using tiny fallback list (5 symbols)")
+    # 4) Fallback tiny list
+    if not syms:
+        syms = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+        print("[SYMS] Using tiny fallback (5 symbols)")
 
-    # de-dupe + optional cap
+    # include-file override
+    if INCLUDE_FILE and os.path.exists(INCLUDE_FILE):
+        inc = {line.strip().upper() for line in open(INCLUDE_FILE) if line.strip()}
+        syms = [s for s in syms if s in inc]
+        print(f"[SYMS] Override include list: {len(syms)} from {INCLUDE_FILE}")
+
+    # sharding, limit, de-dupe
     seen, uniq = set(), []
-    for s in symbols:
+    for s in syms:
         if s and s not in seen:
             seen.add(s); uniq.append(s)
+    if SYMBOL_LIMIT > 0:
+        uniq = uniq[:SYMBOL_LIMIT]
+    if SHARDS > 1:
+        uniq = [s for i, s in enumerate(uniq) if i % SHARDS == SHARD_INDEX]
+        print(f"[SYMS] Shard {SHARD_INDEX+1}/{SHARDS}: {len(uniq)} symbols")
 
-    limit = int(os.getenv("SYMBOL_LIMIT", "0"))
-    if limit > 0:
-        uniq = uniq[:limit]
+    if MIN_SYMBOLS and len(uniq) < MIN_SYMBOLS:
+        raise SystemExit(f"Only {len(uniq)} symbols (<{MIN_SYMBOLS}); aborting")
+    if MIN_SYMBOLS_SHARD and len(uniq) < MIN_SYMBOLS_SHARD:
+        raise SystemExit(f"Shard too small: {len(uniq)} < {MIN_SYMBOLS_SHARD}")
 
-    # safety gate (optional)
-    min_symbols = int(os.getenv("MIN_SYMBOLS", "0"))
-    if min_symbols and len(uniq) < min_symbols:
-        raise SystemExit(f"Only {len(uniq)} symbols loaded (<{min_symbols}); aborting run.")
-
-    print(f"[SYMS] Final symbol count: {len(uniq)} | Sample: {', '.join(uniq[:10])}...")
+    sample = ", ".join(uniq[:10]) + (" ..." if len(uniq) > 10 else "")
+    print(f"[SYMS] Final: {len(uniq)} | Sample: {sample}")
     return uniq
 
-SYMS = SYMS = load_symbols()
-BACKFILL_YEARS = env_int("BACKFILL_YEARS", 10)
-INCREMENTAL_BUFFER_DAYS = env_int("BUFFER_DAYS", 7)
+# === Window planning ===
+def plan_window_global(cur):
+    today = date.today()
+    if BACKFILL_YEARS > 0:
+        start = (today - timedelta(days=365*BACKFILL_YEARS)).isoformat()
+        end   = (today + timedelta(days=1)).isoformat()
+        mode  = f"backfill_{BACKFILL_YEARS}y"
+    elif FORCE_RELOAD_DAYS > 0:
+        start = (today - timedelta(days=FORCE_RELOAD_DAYS)).isoformat()
+        end   = (today + timedelta(days=1)).isoformat()
+        mode  = f"force_reload_{FORCE_RELOAD_DAYS}d"
+    else:
+        mx = exec_one(cur, f"SELECT MAX(CAST(date AS DATE)) FROM {CATALOG}.{SCHEMA}.{TABLE}")
+        if mx:
+            start = (pd.to_datetime(mx).date() + timedelta(days=1)).isoformat()
+        else:
+            start = (today - timedelta(days=3650)).isoformat()
+        end  = (today + timedelta(days=1)).isoformat()
+        mode = "incremental"
+    return start, end, mode
 
-def env_int(name: str, default: int) -> int:
-    v = os.getenv(name, "")
-    try: return int(v)
-    except (TypeError, ValueError): return default
+def silver_count(cur, sym: str) -> int:
+    cur.execute(f"SELECT COUNT(*) FROM {CATALOG}.{SCHEMA}.silver_prices WHERE symbol='{qfmt(sym)}'")
+    return cur.fetchone()[0]
 
-FORCE_RELOAD_DAYS = env_int("FORCE_RELOAD_DAYS", 1)  # 0 = disabled
+# === Fetch ===
+def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[-1].lower() if isinstance(c, tuple) else str(c).lower() for c in df.columns]
+    else:
+        df.columns = [str(c).lower() for c in df.columns]
+    return df
 
-FETCH_TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "90"))  # seconds
+def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
+    try:
+        df = yf.download(symbol, start=start, end=end, interval="1d", auto_adjust=False, progress=False)
+    except Exception as e:
+        print(f"[WARN] fetch fail {symbol}: {e}")
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.reset_index()
+    df = _flatten_columns(df)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"]).dt.date.astype(str)
+    # handle yfinance column oddities
+    rename_map = {"adj close": "adj_close"}
+    for k in list(df.columns):
+        if k.startswith("adj close"):
+            rename_map[k] = "adj_close"
+    df = df.rename(columns=rename_map)
+    for c in ["open","high","low","close","adj_close","volume"]:
+        if c not in df.columns:
+            df[c] = pd.NA
+    df = df[["date","open","high","low","close","adj_close","volume"]]
+    df["symbol"] = symbol
+    df = df[["symbol","date","open","high","low","close","adj_close","volume"]]
+    df = df[~df["close"].isna()]
+    return df
 
 def fetch_with_timeout(symbol, start, end):
     with ThreadPoolExecutor(max_workers=1) as ex:
@@ -119,298 +200,117 @@ def fetch_with_timeout(symbol, start, end):
         try:
             return fut.result(timeout=FETCH_TIMEOUT)
         except FutTimeout:
-            print(f"[TIMEOUT] {symbol} fetch exceeded {FETCH_TIMEOUT}s, skipping")
+            print(f"[TIMEOUT] {symbol} >{FETCH_TIMEOUT}s; skip")
             return pd.DataFrame()
         except Exception as e:
-            print(f"[WARN] {symbol} fetch exception: {e}")
+            print(f"[WARN] {symbol} exception: {e}")
             return pd.DataFrame()
 
-
-DATABRICKS_SERVER    = os.environ["DATABRICKS_SERVER"]
-DATABRICKS_HTTP_PATH = os.environ["DATABRICKS_HTTP_PATH"]
-DATABRICKS_TOKEN     = os.environ["DATABRICKS_TOKEN"]
-
-SHARDS = int(os.getenv("SHARDS", "1"))         # e.g., 4
-SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))  # 0..SHARDS-1
-
-if SHARDS > 1:
-    SYMS = [s for i, s in enumerate(SYMS) if i % SHARDS == SHARD_INDEX]
-    print(f"[SYMS] Shard {SHARD_INDEX+1}/{SHARDS}: {len(SYMS)} symbols")
-
-
-def ensure_table(cur):
-    cur.execute(f"USE CATALOG {CATALOG}")
-    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
-    cur.execute(f"USE {CATALOG}.{SCHEMA}")
-    cur.execute(f"""
-        CREATE TABLE IF NOT EXISTS {TABLE} (
-          symbol STRING,
-          date DATE,
-          open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, adj_close DOUBLE, volume BIGINT,
-          _ingest_ts TIMESTAMP
-        ) USING DELTA
-    """)
-
-def to_yyyy_mm_dd(obj) -> str | None:
-    """Normalize anything (str/datetime/date) to 'YYYY-MM-DD' or None."""
-    if obj is None:
-        return None
-    if isinstance(obj, date) and not isinstance(obj, datetime):
-        return obj.isoformat()
-    if isinstance(obj, datetime):
-        return obj.date().isoformat()
-    if isinstance(obj, str):
-        # Trim to first 10 chars if it's an ISO with time (YYYY-MM-DDTHH:MM:SS)
-        if len(obj) >= 10 and obj[4] == "-" and obj[7] == "-":
-            return obj[:10]
-        # Fallback parse
-        try:
-            return datetime.fromisoformat(obj).date().isoformat()
-        except Exception:
-            pass
-    # As a last resort, let pandas try
-    try:
-        import pandas as pd
-        return pd.to_datetime(obj).date().isoformat()
-    except Exception:
-        return None
-
-def get_current_max_date(cur) -> str | None:
-    cur.execute(f"SELECT MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
-    row = cur.fetchone()
-    return to_yyyy_mm_dd(row[0] if row else None)
-
-def plan_date_window(cur):
-    today = date.today()
-    end_str = (today + timedelta(days=1)).isoformat()  # yfinance end is exclusive
-
-    # Manual override
-    if FORCE_RELOAD_DAYS > 0:
-        start_str = (today - timedelta(days=FORCE_RELOAD_DAYS)).isoformat()
-        return start_str, end_str, f"force_reload_{FORCE_RELOAD_DAYS}d"
-
-    current_max_str = get_current_max_date(cur)  # existing helper returning 'YYYY-MM-DD' or None
-    if current_max_str is None:
-        # initial backfill
-        start_str = (today - timedelta(days=BACKFILL_YEARS * 365)).isoformat()
-        return start_str, end_str, f"initial_backfill_{BACKFILL_YEARS}y"
-
-    # incremental with overlap buffer
-    current_max_dt = datetime.fromisoformat(current_max_str).date()
-    start_str = (current_max_dt - timedelta(days=INCREMENTAL_BUFFER_DAYS)).isoformat()
-    return start_str, end_str, "incremental"
-
-
-def fetch(symbol: str, start: str, end: str) -> pd.DataFrame:
-    try:
-        df = yf.download(
-            symbol,
-            start=start,
-            end=end,               # end is exclusive
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            group_by="column",     # ensure non-MultiIndex when possible
-        )
-    except Exception as e:
-        print(f"[WARN] fetch failed for {symbol}: {e}")
-        return pd.DataFrame()
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    # Flatten possible MultiIndex columns like ('Open','AMZN') -> 'open'
-    if isinstance(df.columns, pd.MultiIndex):
-        df = df.copy()
-        df.columns = [str(c[0]).lower() for c in df.columns]
-    else:
-        df = df.rename(columns=str.lower)
-
-    # Make sure we have a 'date' column
-    if "date" not in df.columns:
-        df = df.reset_index()
-        df.columns = [str(c).lower() for c in df.columns]
-        if "index" in df.columns and "date" not in df.columns:
-            df = df.rename(columns={"index": "date"})
-
-    # Unify adj close name
-    if "adj close" in df.columns and "adj_close" not in df.columns:
-        df = df.rename(columns={"adj close": "adj_close"})
-
-    # Ensure required columns exist
-    for c in ["open", "high", "low", "close", "adj_close", "volume"]:
-        if c not in df.columns:
-            df[c] = pd.NA
-
-    # Normalize types/values
-    df["date"] = pd.to_datetime(df["date"]).dt.date.astype(str)
-    df["symbol"] = symbol.upper()
-
-    # Drop true placeholders and require a real close
-    price_cols = ["open", "high", "low", "close", "adj_close", "volume"]
-    df = df.dropna(how="all", subset=price_cols)
-    df = df[df["close"].notna()]
-
-    if df.empty:
-        return pd.DataFrame()
-
-    return df[["symbol", "date", "open", "high", "low", "close", "adj_close", "volume"]]
-
-
-
-EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
-def to_values_rows(df: pd.DataFrame):
-    """Build VALUES tuples from exactly EXPECTED columns; robust to pd.NA/None."""
-    rows = []
-    # df MUST already be limited to EXPECTED columns and sanitized
-    for symbol, date_str, open_v, high_v, low_v, close_v, adj_v, vol_v in df.itertuples(index=False, name=None):
-        # symbol
-        symbol = (symbol or "")
-        symbol = str(symbol).replace("'", "''")
-
-        # numbers
-        def fnum(x):
-            try:
-                return "NULL" if pd.isna(x) else f"{float(x)}"
-            except Exception:
+# === MERGE ===
+def to_values(rows):
+    out = []
+    for (sym, dt, o,h,l,c,adj,v) in rows:
+        sym_s = f"'{qfmt(sym)}'"
+        dt_s  = f"'{dt}'"
+        def num(x):
+            if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
                 return "NULL"
-        vol = "NULL"
-        try:
-            if not pd.isna(vol_v):
-                vol = f"{int(float(vol_v))}"
-        except Exception:
-            vol = "NULL"
+            return str(x)
+        o_s,h_s,l_s,c_s,adj_s,v_s = map(num, (o,h,l,c,adj,v))
+        out.append(f"({sym_s},{dt_s},{o_s},{h_s},{l_s},{c_s},{adj_s},{v_s},current_timestamp())")
+    return ",\n".join(out)
 
-        rows.append(
-            f"('{symbol}','{date_str}',"
-            f"{fnum(open_v)},{fnum(high_v)},{fnum(low_v)},{fnum(close_v)},{fnum(adj_v)},{vol},"
-            f"current_timestamp())"
-        )
-    return rows
-    
+def merge_batch(cur, rows):
+    if not rows:
+        return
+    vals = to_values(rows)
+    sql = f"""
+MERGE INTO {CATALOG}.{SCHEMA}.{TABLE} AS t
+USING (
+  VALUES
+  {vals}
+) AS s(symbol,date,open,high,low,close,adj_close,volume,_ingest_ts)
+ON t.symbol = s.symbol AND CAST(t.date AS DATE) = CAST(s.date AS DATE)
+WHEN MATCHED THEN UPDATE SET
+  t.open = s.open, t.high = s.high, t.low = s.low, t.close = s.close,
+  t.adj_close = s.adj_close, t.volume = s.volume, t._ingest_ts = s._ingest_ts
+WHEN NOT MATCHED THEN INSERT
+  (symbol,date,open,high,low,close,adj_close,volume,_ingest_ts)
+  VALUES (s.symbol,s.date,s.open,s.high,s.low,s.close,s.adj_close,s.volume,s._ingest_ts)
+"""
+    cur.execute(sql)
 
-def merge_batch(cur, values_rows, batch_size=400):
-    for i in range(0, len(values_rows), batch_size):
-        chunk = ",".join(values_rows[i:i+batch_size])
-        cur.execute(f"""
-            MERGE INTO {CATALOG}.{SCHEMA}.{TABLE} AS t
-            USING (SELECT * FROM VALUES {chunk}
-              AS v(symbol, date, open, high, low, close, adj_close, volume, _ingest_ts)) s
-            ON  t.symbol = s.symbol AND t.date = s.date
-            WHEN MATCHED THEN UPDATE SET *
-            WHEN NOT MATCHED THEN INSERT *;
-        """)
-
-def debug_where_am_i(cur):
-    cur.execute("SELECT current_catalog(), current_schema(), current_user()")
-    print("CTX:", cur.fetchone())
-    cur.execute(f"SELECT COUNT(*), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
-    print("BRONZE_BEFORE:", cur.fetchone())
-
-def debug_after(cur):
-    cur.execute(f"SELECT COUNT(*), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
-    print("BRONZE_AFTER:", cur.fetchone())
-
-def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """Flatten tuple/MultiIndex columns and normalize to lowercase strings."""
-    def flat(c):
-        if isinstance(c, tuple):
-            # choose the last non-empty part like ('AAPL','Adj Close') -> 'Adj Close'
-            parts = [p for p in c if p not in (None, "")]
-            name = parts[-1] if parts else ""
-            return str(name).lower()
-        return str(c).lower()
-
-    df = df.copy()
-    df.columns = [flat(c) for c in df.columns]
-    # unify common variants
-    if "adj close" in df.columns and "adj_close" not in df.columns:
-        df = df.rename(columns={"adj close": "adj_close"})
-    # sometimes date is 'datetime' or 'index'
-    if "date" not in df.columns:
-        if "datetime" in df.columns:
-            df = df.rename(columns={"datetime": "date"})
-        elif "index" in df.columns:
-            df = df.rename(columns={"index": "date"})
-    return df
-
-
-
-
+# === Main ===
 def main():
-    with sql.connect(server_hostname=DATABRICKS_SERVER,
-                     http_path=DATABRICKS_HTTP_PATH,
-                     access_token=DATABRICKS_TOKEN) as conn:
-        with conn.cursor() as cur:
-            ensure_table(cur)
-            debug_where_am_i(cur)
-            start, end, mode = plan_date_window(cur)
-            print(f"Ingest mode: {mode} | Range: {start} → {end} | Symbols: {len(SYMS)}")
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT current_catalog(), current_schema(), current_user()")
+        print("CTX:", cur.fetchone())
 
-            frames, failed = [], []
-            for s in SYMS:
-                df = fetch_with_timeout(s, start, end)
+        syms = load_symbols()
 
-                # === paste these debug prints right here ===
+        before = None
+        cur.execute(f"SELECT COUNT(1), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
+        before = cur.fetchone()
+        print("BRONZE_BEFORE:", before)
+
+        start_g, end_g, mode = plan_window_global(cur)
+        print(f"Ingest mode: {mode} | Range: {start_g} → {end_g} | Symbols: {len(syms)}")
+
+        frames, total_rows = [], 0
+
+        def fetch_one(s):
+            start, end = start_g, end_g
+            if SMART_BACKFILL:
                 try:
-                    rows = 0 if df is None else len(df)
-                    dmin = None if df is None or df.empty else df["date"].min()
-                    dmax = None if df is None or df.empty else df["date"].max()
-                    print(f"[FETCH] {s} window {start}→{end} rows={rows} min={dmin} max={dmax}")
+                    n = silver_count(cur, s)
+                    if n < SMART_MIN_ROWS:
+                        start = (date.today() - timedelta(days=3650)).isoformat()
+                except Exception:
+                    pass
+            df = fetch_with_timeout(s, start, end)
+            if df is not None and not df.empty:
+                r = (df["date"].min(), df["date"].max(), len(df))
+                print(f"[DATA] {s}: {r[0]} → {r[1]} ({r[2]} rows)")
+            return df
 
-                    if df is not None and not df.empty:
-                        cols = [c for c in ["date","open","high","low","close","adj_close","volume"] if c in df.columns]
-                        print(df[cols].tail(2).to_string(index=False))
-                except Exception as e:
-                    print(f"[FETCH] {s} print error: {e}")
-                # === end debug ===
-                
-                if df.empty:
-                    failed.append(s)
-                else:
-                    try:
-                        dmin, dmax = df["date"].min(), df["date"].max()
-                        print(f"[DATA] {s}: {dmin} → {dmax} ({len(df)} rows)")
-                    except Exception:
-                        print(f"[DATA] {s}: {len(df)} rows")
+        # parallel fetch
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            futs = {pool.submit(fetch_one, s): s for s in syms}
+            i, n = 0, len(futs)
+            for fut in futs:
+                df = fut.result()
+                i += 1
+                if i % 25 == 0 or i == n:
+                    print(f"[PROGRESS] {i}/{n} symbols")
+                if df is not None and not df.empty:
                     frames.append(df)
+                    total_rows += len(df)
 
-            if failed:
-                # informational only, we still ingest what we have
-                print(f"[INFO] {len(failed)} symbols returned no data or failed: {failed[:8]}{'...' if len(failed)>8 else ''}")
+        if not frames:
+            print("No rows to upsert.")
+        else:
+            all_df = pd.concat(frames, ignore_index=True)
+            all_df = all_df[["symbol","date","open","high","low","close","adj_close","volume"]]
+            rows = list(map(tuple, all_df.itertuples(index=False, name=None)))
 
-            if not frames:
-                print("No new data fetched.")
-                debug_after(cur)
-                return
-
-            all_df = pd.concat(frames, ignore_index=True, sort=False)
-            all_df = normalize_cols(all_df)
-
-            EXPECTED = ["symbol","date","open","high","low","close","adj_close","volume"]
-            for col in EXPECTED:
-                if col not in all_df.columns:
-                    all_df[col] = pd.NA
-            all_df = all_df[EXPECTED].copy()  
-
-            all_df["symbol"] = all_df["symbol"].astype("string").fillna("").astype(str)
-            all_df["date"]   = pd.to_datetime(all_df["date"]).dt.date.astype(str)
-
-
-            print(f"[DEBUG] fetched_rows_total={len(all_df)}")
-            rows = to_values_rows(all_df)
+            print(f"[DEBUG] fetched_rows_total={total_rows}")
             print(f"[DEBUG] values_rows_prepared={len(rows)}")
-            if rows:
-                print("[MERGE] first_tuple:\n", rows[0])
 
-            if not rows:
-                print("No rows to upsert.")
-                debug_after(cur)
-                return
+            for i in range(0, len(rows), BATCH_ROWS):
+                if i == 0 and rows:
+                    # show first tuple preview
+                    preview = rows[0]
+                    p = (preview[0], preview[1]) + tuple(
+                        (None if (isinstance(x, float) and math.isnan(x)) else x) for x in preview[2:]
+                    )
+                    print("[MERGE] first_tuple:\n", f"('{p[0]}','{p[1]}',{p[2] if p[2] is not None else 'NULL'},{p[3] if p[3] is not None else 'NULL'},{p[4] if p[4] is not None else 'NULL'},{p[5] if p[5] is not None else 'NULL'},{p[6] if p[6] is not None else 'NULL'},{p[7] if p[7] is not None else 'NULL'},current_timestamp())")
+                merge_batch(cur, rows[i:i+BATCH_ROWS])
 
-            merge_batch(cur, rows)
-            debug_after(cur)
-            print(f"Upserted {len(rows)} rows into {CATALOG}.{SCHEMA}.{TABLE}.")
+        cur.execute(f"SELECT COUNT(1), MIN(date), MAX(date) FROM {CATALOG}.{SCHEMA}.{TABLE}")
+        after = cur.fetchone()
+        print("BRONZE_AFTER:", after)
+
+        print(f"Upserted {total_rows if frames else 0} rows into {CATALOG}.{SCHEMA}.{TABLE}.")
 
 if __name__ == "__main__":
     main()
