@@ -195,10 +195,10 @@ with tabs[2]:
     st.subheader("Price vs. Moving Averages, 30-Day Trend")
 
     st.markdown(
-        """
-        This chart visualizes how a selected stock’s **closing price** compares to its **20-day** and **50-day Simple Moving Averages (SMAs)** over the last 10 trading days.    
-        **Closing Price** reflects the final price of the day, the market’s consensus value.  
-        **SMA (Simple Moving Average)** smooths short-term fluctuations, revealing underlying trends.  
+        """This visualization shows how a selected stock’s **closing price** compares to its **20-day** and **50-day Simple Moving Averages (SMAs)** over the past 30 trading days.   
+
+        **Closing Price** represents the daily market close.  
+        **SMA (Simple Moving Average)** smooths fluctuations to reveal underlying trends.  
         """
     )
 
@@ -221,44 +221,54 @@ with tabs[2]:
     """
     df3 = run_query(q3)
 
-    # --- Line chart: price + SMAs ---
-    base = alt.Chart(df3).encode(x=alt.X("date:T", title="Date"))
+    # Melt into long format for shared color/legend
+    df_long = df3.melt("date", value_vars=["close", "sma_20", "sma_50"],
+                       var_name="Series", value_name="Price")
 
-    close_line = base.mark_line(color="steelblue", strokeWidth=2).encode(
-        y=alt.Y("close:Q", title="Price ($)"),
-        tooltip=[
-            alt.Tooltip("date:T", title="Date"),
-            alt.Tooltip("close:Q", title="Close ($)", format=".2f"),
-            alt.Tooltip("sma_20:Q", title="SMA (20-Day)", format=".2f"),
-            alt.Tooltip("sma_50:Q", title="SMA (50-Day)", format=".2f"),
-        ],
-    )
+    # Clean labels
+    label_map = {
+        "close": "Close Price",
+        "sma_20": "SMA (20-Day)",
+        "sma_50": "SMA (50-Day)"
+    }
+    df_long["Series"] = df_long["Series"].map(label_map)
 
-    sma20_line = base.mark_line(color="orange", strokeDash=[4, 3]).encode(
-        y="sma_20:Q"
-    )
-
-    sma50_line = base.mark_line(color="green", strokeDash=[4, 3]).encode(
-        y="sma_50:Q"
-    )
-
+    # --- Line chart with legend ---
     chart = (
-        (close_line + sma20_line + sma50_line)
+        alt.Chart(df_long)
+        .mark_line(strokeWidth=2)
+        .encode(
+            x=alt.X("date:T", title="Date"),
+            y=alt.Y("Price:Q", title="Price ($)"),
+            color=alt.Color(
+                "Series:N",
+                title="Line Type",
+                scale=alt.Scale(
+                    domain=["Close Price", "SMA (20-Day)", "SMA (50-Day)"],
+                    range=["steelblue", "orange", "green"]
+                )
+            ),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("Series:N", title="Type"),
+                alt.Tooltip("Price:Q", title="Price ($)", format=".2f"),
+            ],
+        )
         .properties(
             height=500,
             width="container",
-            title=f"{selected_symbol}: Price vs. 20 & 50-Day SMAs (Last 30 Days)"
+            title=f"{selected_symbol}: Price vs 20 & 50-Day Moving Averages (Last 30 Days)"
         )
         .configure_legend(labelFontSize=12, titleFontSize=13)
     )
 
     st.altair_chart(chart, use_container_width=True)
 
-    st.markdown("""
-        **Interpretation:**  
-        - When **price > SMA(20)** → bullish short-term momentum.  
-        - When **price > SMA(50)** → longer-term strength and trend continuation.  
-        - When **price < both SMAs** → potential weakness or correction phase.  """)
+    st.markdown("""**Interpretation:**  
+        When **Price > SMA(20)** → bullish short-term momentum.  
+        When **Price > SMA(50)** → strong medium-term trend.  
+        When **Price < both SMAs** → possible correction or downtrend.""")
+    
 
     # --- Data table ---
     st.dataframe(
@@ -274,13 +284,14 @@ with tabs[2]:
         hide_index=True,
     )
 
-    # --- Feature notes ---
+    # --- Feature Notes ---
     st.markdown(
         """
         **Feature Notes:**  
-        **Closing Price:** Final market price per day.  
-        **SMA (20-Day):** Short-term average; reacts faster to price changes.  
-        **SMA (50-Day):** Long-term average; smooths broader trends.  
-        Tracking crossovers between the two often signals **trend shifts** or **momentum reversals**.
+        **Close ($):** End-of-day market price.  
+        **SMA (20-Day):** Tracks short-term momentum.  
+        **SMA (50-Day):** Reflects longer-term trend strength.  
+
+        Monitoring crossovers (e.g., 20-day rising above 50-day) can highlight **trend reversals** or **entry signals**.
         """
     )
