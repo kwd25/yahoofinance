@@ -23,30 +23,46 @@ jobs:
           pip install yfinance pandas requests lxml databricks-sql-connector
 
       - name: Start & wait for SQL Warehouse
+        shell: bash
         env:
           DATABRICKS_SERVER:       ${{ secrets.DATABRICKS_SERVER }}
           DATABRICKS_TOKEN:        ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
         run: |
-          set -e
-          SERVER="${DATABRICKS_SERVER#https://}"; SERVER="${SERVER#http://}"; SERVER="${SERVER%%/}"
+          set -euo pipefail
 
-          echo "Starting warehouse ${DATABRICKS_WAREHOUSE_ID}..."
-          curl -fsS -X POST -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
-            "https://${SERVER}/api/2.0/sql/warehouses/${DATABRICKS_WAREHOUSE_ID}/start" || true
+          # Normalize server hostname (no scheme/trailing slash)
+          SERVER="${DATABRICKS_SERVER#https://}"
+          SERVER="${SERVER#http://}"
+          SERVER="${SERVER%%/}"
+          WID="${DATABRICKS_WAREHOUSE_ID}"
+
+          echo "Starting warehouse ${WID}..."
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+            "https://${SERVER}/api/2.0/sql/warehouses/${WID}/start" || true
 
           echo "Waiting for RUNNING..."
-          for i in $(seq 1 60); do
-            STATE=$(curl -fsS -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
-              "https://${SERVER}/api/2.0/sql/warehouses/${DATABRICKS_WAREHOUSE_ID}" | \
-              python - <<'PY'import sys, json; print(json.load(sys.stdin).get("state","").upper())PY)
+          for i in {1..60}; do
+            # Try jq first (default on GitHub runners)
+            if command -v jq >/dev/null 2>&1; then
+              STATE="$(curl -sS -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+                "https://${SERVER}/api/2.0/sql/warehouses/${WID}" | jq -r '.state // ""')"
+            else
+              # Python fallback if jq is ever missing
+              STATE="$(curl -sS -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+                "https://${SERVER}/api/2.0/sql/warehouses/${WID}" | \
+                python -c "import sys,json; print((json.load(sys.stdin).get('state','') or '').upper())")"
+            fi
+
             echo "State: ${STATE}"
-            if [ "$STATE" = "RUNNING" ]; then
+            if [[ "${STATE^^}" == "RUNNING" ]]; then
               echo "Warehouse is RUNNING."
               exit 0
             fi
             sleep 10
           done
+
           echo "Timed out waiting for RUNNING."
           exit 1
 
