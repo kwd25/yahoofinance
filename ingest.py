@@ -130,6 +130,13 @@ DATABRICKS_SERVER    = os.environ["DATABRICKS_SERVER"]
 DATABRICKS_HTTP_PATH = os.environ["DATABRICKS_HTTP_PATH"]
 DATABRICKS_TOKEN     = os.environ["DATABRICKS_TOKEN"]
 
+SHARDS = int(os.getenv("SHARDS", "1"))         # e.g., 4
+SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))  # 0..SHARDS-1
+
+if SHARDS > 1:
+    SYMS = [s for i, s in enumerate(SYMS) if i % SHARDS == SHARD_INDEX]
+    print(f"[SYMS] Shard {SHARD_INDEX+1}/{SHARDS}: {len(SYMS)} symbols")
+
 
 def ensure_table(cur):
     cur.execute(f"USE CATALOG {CATALOG}")
