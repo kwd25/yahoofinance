@@ -1,0 +1,19 @@
+name: Backfill Bronze Prices
+on:
+  workflow_dispatch:
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Run backfill script
+        env:
+          DATABRICKS_SERVER: ${{ secrets.DATABRICKS_SERVER }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: python backfill_partial_symbols.py
