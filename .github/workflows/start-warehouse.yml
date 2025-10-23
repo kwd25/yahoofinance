@@ -10,7 +10,7 @@ jobs:
     steps:
       - name: Start and wait for Databricks SQL Warehouse
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}              # e.g. adb-xxxx.azuredatabricks.net
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_SERVER }}              # e.g. adb-xxxx.azuredatabricks.net
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}            # PAT with CAN MANAGE (or at least start rights)
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
         run: |
