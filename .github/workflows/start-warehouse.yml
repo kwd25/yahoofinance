@@ -1,0 +1,36 @@
+name: start-warehouse
+
+on:
+  repository_dispatch:
+    types: [start_databricks_warehouse]  # we'll trigger this from Streamlit
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start and wait for Databricks SQL Warehouse
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}              # e.g. adb-xxxx.azuredatabricks.net
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}            # PAT with CAN MANAGE (or at least start rights)
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+        run: |
+          set -euo pipefail
+          host="https://${DATABRICKS_HOST}"
+          wid="$DATABRICKS_WAREHOUSE_ID"
+          auth="Authorization: Bearer ${DATABRICKS_TOKEN}"
+
+          # Try to start (idempotent if already running)
+          curl -sf -X POST "${host}/api/2.0/sql/warehouses/${wid}/start" -H "${auth}"
+
+          # Poll for RUNNING
+          for i in {1..60}; do
+            state=$(curl -sf "${host}/api/2.0/sql/warehouses/${wid}" -H "${auth}" | jq -r '.state')
+            echo "Warehouse state: ${state}"
+            if [ "${state}" = "RUNNING" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for warehouse to RUN"
+          exit 1
