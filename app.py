@@ -21,14 +21,37 @@ WAREHOUSE_ID = re.search(r"/warehouses/([A-Za-z0-9\-]+)", HTTP_PATH).group(1)
 def _norm_server(host: str) -> str:
     return host.replace("https://","").replace("http://","").strip("/")
 
+def trigger_github_start():
+    owner = st.secrets["GITHUB_OWNER"]     
+    repo  = st.secrets["GITHUB_REPO"]      
+    token = st.secrets["GITHUB_TRIGGER_TOKEN"]  
+    url   = f"https://api.github.com/repos/{owner}/{repo}/dispatches"
+    r = requests.post(
+        url,
+        json={"event_type": "start_databricks_warehouse"},
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if r.status_code not in (204, 201):
+        raise RuntimeError(f"Dispatch failed: {r.status_code} {r.text}")
+
 def _warehouse_state(server: str, token: str, wid: str) -> str:
     url = f"https://{_norm_server(server)}/api/2.0/sql/warehouses/{wid}"
     r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
     r.raise_for_status()
     return (r.json().get("state") or "").upper()
 
-def ensure_warehouse_running_via_poll(max_wait_s: int = 300, show_status: bool = True):
-    """Only polls state. Assumes an external job (GitHub Action) has already started it."""
+def ensure_started_then_poll(max_wait_s: int = 300, show_status: bool = True):
+    # If already RUNNING, skip triggering to avoid spamming Actions
+    try:
+        if _warehouse_state(SERVER, TOKEN, WAREHOUSE_ID) == "RUNNING":
+            return
+    except Exception:
+        pass
+
+    trigger_github_start()
+
+    # Then poll until RUNNING (same as you already do)
     start = time.time()
     last = None
     while time.time() - start < max_wait_s:
@@ -44,17 +67,16 @@ def ensure_warehouse_running_via_poll(max_wait_s: int = 300, show_status: bool =
         time.sleep(5)
     raise TimeoutError("Warehouse did not reach RUNNING in time. (Check GitHub Action logs.)")
 
+
 @st.cache_resource(show_spinner=False)
 def connect_dbsql():
-    # Only poll; do NOT try to start from here
-    ensure_warehouse_running_via_poll(max_wait_s=300, show_status=True)
-    conn = dbsql.connect(
+    ensure_started_then_poll(max_wait_s=300, show_status=True)
+    return dbsql.connect(
         server_hostname=_norm_server(SERVER),
         http_path=HTTP_PATH,
         access_token=TOKEN,
         _session_parameters={"catalog": CATALOG, "schema": SCHEMA},
     )
-    return conn
 
 @st.cache_data(show_spinner=False, ttl=60)
 def run_query(sql: str):
