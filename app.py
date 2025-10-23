@@ -11,108 +11,62 @@ import os, time, requests, pandas as pd
 import streamlit as st
 import databricks.sql as dbsql
 
-# --- Load settings from secrets (with env fallback) ---
-SERVER = os.getenv("DATABRICKS_SERVER", st.secrets.get("DATABRICKS_SERVER", ""))
-HTTP_PATH = os.getenv("DATABRICKS_HTTP_PATH", st.secrets.get("DATABRICKS_HTTP_PATH", ""))
-TOKEN = os.getenv("DATABRICKS_TOKEN", st.secrets.get("DATABRICKS_TOKEN", ""))
-WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", st.secrets.get("DATABRICKS_WAREHOUSE_ID", ""))
-CATALOG = "workspace"
-SCHEMA = "yahoo"
+SERVER   = st.secrets["DATABRICKS_SERVER_HOSTNAME"]
+HTTP_PATH= st.secrets["DATABRICKS_HTTP_PATH"]
+TOKEN    = st.secrets["DATABRICKS_ACCESS_TOKEN"]
+CATALOG  = st.secrets.get("DATABRICKS_CATALOG", "hive_metastore")
+SCHEMA   = st.secrets.get("DATABRICKS_SCHEMA", "default")
+WAREHOUSE_ID = re.search(r"/warehouses/([A-Za-z0-9\-]+)", HTTP_PATH).group(1)
 
 def _norm_server(host: str) -> str:
     return host.replace("https://","").replace("http://","").strip("/")
 
 def _warehouse_state(server: str, token: str, wid: str) -> str:
     url = f"https://{_norm_server(server)}/api/2.0/sql/warehouses/{wid}"
-    r = requests.get(url, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=15)
+    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
     r.raise_for_status()
     return (r.json().get("state") or "").upper()
 
-def _warehouse_start(server: str, token: str, wid: str) -> None:
-    url = f"https://{_norm_server(server)}/api/2.0/sql/warehouses/{wid}/start"
-    # POST may 409 if already starting; that's fine.
-    requests.post(url, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=15)
-
-@st.cache_resource(show_spinner=False)
-def ensure_warehouse_running(silent: bool = True, ok_ttl_s: int = 300) -> str:
-    """
-    Starts the warehouse (if WAREHOUSE_ID is set) and returns final state.
-    Caches success for ok_ttl_s seconds to avoid re-checking every rerun.
-    When silent=True, no status bar is shown.
-    """
-    if not (SERVER and HTTP_PATH and TOKEN):
-        missing = [k for k, ok in [("SERVER", SERVER), ("HTTP_PATH", HTTP_PATH), ("TOKEN", TOKEN)] if not ok]
-        raise RuntimeError(f"Missing DATABRICKS secrets: {', '.join(missing)}")
-
-    # If no WAREHOUSE_ID, we can't start/inspect; just proceed (connection may still work).
-    if not WAREHOUSE_ID:
-        return "UNKNOWN"
-
-    # Throttle how often we re-check to keep the UI clean
-    now = time.time()
-    ok_until = st.session_state.get("_wh_ok_until", 0.0)
-    if now < ok_until:
-        return "RUNNING"
-
-    def _check_and_start():
+def ensure_warehouse_running_via_poll(max_wait_s: int = 300, show_status: bool = True):
+    """Only polls state. Assumes an external job (GitHub Action) has already started it."""
+    start = time.time()
+    last = None
+    while time.time() - start < max_wait_s:
         try:
             state = _warehouse_state(SERVER, TOKEN, WAREHOUSE_ID)
         except Exception:
-            state = ""
-        if state != "RUNNING":
-            _warehouse_start(SERVER, TOKEN, WAREHOUSE_ID)
-            deadline = time.time() + 300  # 5 min
+            state = "UNKNOWN"
+        if show_status and state != last:
+            st.info(f"SQL Warehouse state: {state}")
             last = state
-            while time.time() < deadline:
-                try:
-                    state = _warehouse_state(SERVER, TOKEN, WAREHOUSE_ID)
-                except Exception:
-                    state = ""
-                if state == "RUNNING":
-                    break
-                time.sleep(5)
-        return state or "UNKNOWN"
+        if state == "RUNNING":
+            return
+        time.sleep(5)
+    raise TimeoutError("Warehouse did not reach RUNNING in time. (Check GitHub Action logs.)")
 
-    if silent:
-        state = _check_and_start()
-    else:
-        # one-time visible status if you ever want it
-        with st.status("Checking SQL Warehouse…", expanded=False) as _status:
-            state = _check_and_start()
-            if state == "RUNNING":
-                _status.update(label="Warehouse is RUNNING", state="complete")
-            else:
-                _status.update(label=f"Warehouse not RUNNING (state: {state})", state="error")
-
-    # cache the OK state for a short period so we don’t show any UI next rerun
-    if state == "RUNNING":
-        st.session_state["_wh_ok_until"] = time.time() + ok_ttl_s
-
-    if state != "RUNNING":
-        # We still raise so users see a clear error if warehouse failed to start
-        raise RuntimeError(f"Warehouse state is {state!r}, not RUNNING.")
-
-    return state
-
+@st.cache_resource(show_spinner=False)
 def connect_dbsql():
-    try:
-        ensure_warehouse_running(silent=True, ok_ttl_s=300)  # silent & cached
-    except Exception as e:
-        st.error(f"Databricks Warehouse check failed: {e}")
-        st.stop()
-
-    return dbsql.connect(
+    # Only poll; do NOT try to start from here
+    ensure_warehouse_running_via_poll(max_wait_s=300, show_status=True)
+    conn = dbsql.connect(
         server_hostname=_norm_server(SERVER),
         http_path=HTTP_PATH,
         access_token=TOKEN,
         _session_parameters={"catalog": CATALOG, "schema": SCHEMA},
     )
+    return conn
 
 @st.cache_data(show_spinner=False, ttl=60)
-def run_query(sql: str) -> pd.DataFrame:
-    with connect_dbsql() as conn, conn.cursor() as cur:
-        return pd.read_sql(sql, conn)
-
+def run_query(sql: str):
+    # Reuse the cached connection (don’t open/close per call)
+    conn = connect_dbsql()
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+    # return list-of-dicts (or build a DataFrame if you prefer)
+    return [dict(zip(cols, r)) for r in rows]
+    
 # -----------------------
 # Streamlit layout
 # -----------------------
