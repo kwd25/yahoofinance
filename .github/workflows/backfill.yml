@@ -16,4 +16,6 @@ jobs:
           DATABRICKS_SERVER: ${{ secrets.DATABRICKS_SERVER }}
           DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: python backfill_partial_symbols.py
+          PYTHONUNBUFFERED: "1"  
+        run: python -u backfill_partial_symbols.py
+        
