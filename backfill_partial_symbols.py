@@ -116,45 +116,49 @@ def connect_with_backoff():
 END = date.today()
 START = END - timedelta(days=YEARS_BACK*365 + 5)  # cushion
 
-def download_batch(tickers: List[str]) -> pd.DataFrame:
+def download_batch(tickers: list[str]) -> pd.DataFrame:
     df = yf.download(
         tickers=" ".join(tickers),
         start=START.isoformat(),
-        end=(END + timedelta(days=1)).isoformat(),  # yfinance end-exclusive
+        end=(END + timedelta(days=1)).isoformat(),  # yfinance end is exclusive
         interval="1d",
         auto_adjust=False,
         group_by="ticker",
-        threads=True
+        threads=True,
+        progress=False,     # ← hides the 0–100% bars per batch
     )
-    if df is None or len(df) == 0:
+    if df is None or df.empty:
         return pd.DataFrame()
 
     frames = []
-    if hasattr(df, "columns") and isinstance(df.columns, pd.Multiindex | pd.MultiIndex):
+    # ✅ correct class name: pd.MultiIndex
+    if isinstance(df.columns, pd.MultiIndex):
+        # Multi-ticker case
         for t in tickers:
             if t in df.columns.levels[0]:
                 sub = df[t].copy()
                 sub["symbol"] = t
                 frames.append(sub.reset_index())
     else:
-        # single ticker case
+        # Single-ticker fallback
         df = df.reset_index().copy()
         df["symbol"] = tickers[0]
         frames.append(df)
 
-    out = pd.concat(frames, ignore_index=True).rename(columns={
-        "Date":"date","Open":"open","High":"high","Low":"low","Close":"close",
-        "Adj Close":"adj_close","Volume":"volume"
-    })
-    out = out[["symbol","date","open","high","low","close","adj_close","volume"]]
+    out = (pd.concat(frames, ignore_index=True)
+             .rename(columns={
+                 "Date":"date","Open":"open","High":"high","Low":"low","Close":"close",
+                 "Adj Close":"adj_close","Volume":"volume"
+             })[["symbol","date","open","high","low","close","adj_close","volume"]])
+
     # normalize to midnight timestamps, no tz
     out["date"] = pd.to_datetime(out["date"]).dt.tz_localize(None).dt.normalize()
-    out = out.dropna(subset=["date","close"])
-    # cast numerics
+
+    # cast + clean
     for c in ["open","high","low","close","adj_close"]:
         out[c] = pd.to_numeric(out[c], errors="coerce")
     out["volume"] = pd.to_numeric(out["volume"], errors="coerce").astype("Int64")
-    out = out.dropna(subset=["date","close"])  # drop rows that failed casting
+    out = out.dropna(subset=["date","close"])
     return out
 
 def download_all() -> pd.DataFrame:
