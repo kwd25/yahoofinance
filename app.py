@@ -60,7 +60,6 @@ def ensure_started_then_poll(max_wait_s: int = 300, show_status: bool = True):
         except Exception:
             state = "UNKNOWN"
         if show_status and state != last:
-            st.info(f"SQL Warehouse state: {state}")
             last = state
         if state == "RUNNING":
             return
