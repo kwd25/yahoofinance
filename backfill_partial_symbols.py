@@ -131,7 +131,7 @@ def download_batch(tickers: list[str]) -> pd.DataFrame:
         return pd.DataFrame()
 
     frames = []
-    # ✅ correct class name: pd.MultiIndex
+    # correct class name: pd.MultiIndex
     if isinstance(df.columns, pd.MultiIndex):
         # Multi-ticker case
         for t in tickers:
@@ -188,7 +188,7 @@ def download_all() -> pd.DataFrame:
 
 # ---------------------- Upload / Merge --------------------
 def ensure_target_and_stage(cur, staging: str):
-    # target
+    # target (unchanged)
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS {TABLE} (
           date TIMESTAMP,
@@ -203,7 +203,7 @@ def ensure_target_and_stage(cur, staging: str):
         USING delta
         PARTITIONED BY (symbol)
     """)
-    # staging (append-only for speed)
+    # staging (no table feature property)
     cur.execute(f"""
         CREATE OR REPLACE TABLE {staging} (
           symbol STRING,
@@ -216,9 +216,9 @@ def ensure_target_and_stage(cur, staging: str):
           volume BIGINT
         )
         USING delta
-        TBLPROPERTIES (delta.feature.appendOnly = true)
     """)
     print(f"Created staging table: {staging}")
+    
 
 def insert_into_staging(cur, staging: str, rows: list[tuple]):
     insert_sql = f"""
@@ -284,7 +284,7 @@ def main():
             cur.execute(f"DROP TABLE IF EXISTS {staging}")
             print("Dropped staging table.")
         conn.commit()
-        print("✅ Backfill complete!")
+        print("Backfill complete!")
     finally:
         conn.close()
 
