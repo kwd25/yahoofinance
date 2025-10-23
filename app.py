@@ -3,13 +3,13 @@ import pandas as pd
 import streamlit as st
 import databricks.sql as dbsql
 import altair as alt
-
+import re
+import os, time, requests, pandas as pd
 # -----------------------
 # Databricks connection
 # -----------------------
-import os, time, requests, pandas as pd
-import streamlit as st
-import databricks.sql as dbsql
+
+
 
 SERVER   = st.secrets["DATABRICKS_SERVER"]
 HTTP_PATH= st.secrets["DATABRICKS_HTTP_PATH"]
