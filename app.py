@@ -79,15 +79,13 @@ def connect_dbsql():
     )
 
 @st.cache_data(show_spinner=False, ttl=60)
-def run_query(sql: str):
-    # Reuse the cached connection (don’t open/close per call)
+@st.cache_data(show_spinner=False, ttl=60)
+def run_query(sql: str) -> pd.DataFrame:
     conn = connect_dbsql()
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
-    # return list-of-dicts (or build a DataFrame if you prefer)
-    return [dict(zip(cols, r)) for r in rows]
+    # Using pandas to get a DataFrame directly
+    df = pd.read_sql(sql, conn)
+    return df
+
     
 # -----------------------
 # Streamlit layout
