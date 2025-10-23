@@ -11,11 +11,11 @@ import os, time, requests, pandas as pd
 import streamlit as st
 import databricks.sql as dbsql
 
-SERVER   = st.secrets["DATABRICKS_SERVER_HOSTNAME"]
+SERVER   = st.secrets["DATABRICKS_SERVER"]
 HTTP_PATH= st.secrets["DATABRICKS_HTTP_PATH"]
-TOKEN    = st.secrets["DATABRICKS_ACCESS_TOKEN"]
-CATALOG  = st.secrets.get("DATABRICKS_CATALOG", "hive_metastore")
-SCHEMA   = st.secrets.get("DATABRICKS_SCHEMA", "default")
+TOKEN    = st.secrets["DATABRICKS_TOKEN"]
+CATALOG  = st.secrets.get("CATALOG", "workspace")
+SCHEMA   = st.secrets.get("SCHEMA", "yahoo")
 WAREHOUSE_ID = re.search(r"/warehouses/([A-Za-z0-9\-]+)", HTTP_PATH).group(1)
 
 def _norm_server(host: str) -> str:
