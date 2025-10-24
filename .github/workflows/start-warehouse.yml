@@ -3,7 +3,6 @@ name: start-warehouse
 on:
   repository_dispatch:
     types: [start_databricks_warehouse]
-  workflow_dispatch: {}
 jobs:
   start:
     runs-on: ubuntu-latest
