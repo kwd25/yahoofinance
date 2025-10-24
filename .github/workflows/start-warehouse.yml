@@ -8,47 +8,45 @@ jobs:
   start:
     runs-on: ubuntu-latest
     steps:
-      - name: Start and wait for Databricks SQL Warehouse
+      - name: Start & wait for SQL Warehouse
+        shell: bash
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_SERVER }}              # adb-xxxx.azuredatabricks.net  (NO https://)
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_SERVER:       ${{ secrets.DATABRICKS_SERVER }}
+          DATABRICKS_TOKEN:        ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
         run: |
           set -euo pipefail
 
-          # --- Normalize host ---
-          host="${DATABRICKS_HOST#https://}"
-          host="${host#http://}"
-          host="${host%/}"
+          # Normalize server hostname (no scheme/trailing slash)
+          SERVER="${DATABRICKS_SERVER#https://}"
+          SERVER="${SERVER#http://}"
+          SERVER="${SERVER%%/}"
+          WID="${DATABRICKS_WAREHOUSE_ID}"
 
-          wid="${DATABRICKS_WAREHOUSE_ID}"
-          auth="Authorization: Bearer ${DATABRICKS_TOKEN}"
-          base="https://${host}/api/2.0/sql/warehouses/${wid}"
+          echo "Starting warehouse ${WID}..."
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+            "https://${SERVER}/api/2.0/sql/warehouses/${WID}/start" || true
 
-          echo "Starting warehouse id: ${wid} on ${host}"
+          echo "Waiting for RUNNING..."
+          for i in {1..60}; do
+            # Try jq first (default on GitHub runners)
+            if command -v jq >/dev/null 2>&1; then
+              STATE="$(curl -sS -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+                "https://${SERVER}/api/2.0/sql/warehouses/${WID}" | jq -r '.state // ""')"
+            else
+              # Python fallback if jq is ever missing
+              STATE="$(curl -sS -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+                "https://${SERVER}/api/2.0/sql/warehouses/${WID}" | \
+                python -c "import sys,json; print((json.load(sys.stdin).get('state','') or '').upper())")"
+            fi
 
-          # --- Attempt start (do NOT use -f) ---
-          http_code=$(curl -sS -X POST "${base}/start" -H "${auth}" -o /tmp/start_body -w "%{http_code}")
-
-          echo "Start response code: ${http_code}"
-          if [[ "${http_code}" != "200" && "${http_code}" != "202" && "${http_code}" != "204" && "${http_code}" != "409" ]]; then
-            echo "Start response body:"
-            cat /tmp/start_body || true
-            echo "Failed to start warehouse (unexpected HTTP ${http_code})."
-            exit 1
-          fi
-
-          # --- Poll state ---
-          max_tries=60
-          for i in $(seq 1 $max_tries); do
-            state=$(curl -sS "${base}" -H "${auth}" | jq -r '.state // "UNKNOWN"')
-            echo "Warehouse state: ${state} (check ${i}/${max_tries})"
-            if [[ "${state}" == "RUNNING" ]]; then
+            echo "State: ${STATE}"
+            if [[ "${STATE^^}" == "RUNNING" ]]; then
               echo "Warehouse is RUNNING."
               exit 0
             fi
-            # Treat some states as transient ok: STARTING, STOPPING, RESUMING, PROVISIONING
-            sleep 5
+            sleep 10
           done
 
           echo "Timed out waiting for RUNNING."
