@@ -67,6 +67,15 @@ def ensure_started_then_poll(max_wait_s: int = 300, show_status: bool = True):
     raise TimeoutError("Warehouse did not reach RUNNING in time. (Check GitHub Action logs.)")
 
 
+owner = st.secrets["GITHUB_OWNER"]
+repo  = st.secrets["GITHUB_REPO"]
+token = st.secrets["GITHUB_TRIGGER_TOKEN"]
+workflow_file = "start-warehouse.yml"  # exact filename
+url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow_file}/dispatches"
+r = requests.post(url, json={"ref": "main"},headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},timeout=15,)
+assert r.status_code == 204, f"Workflow dispatch failed: {r.status_code} {r.text}"
+
+
 @st.cache_resource(show_spinner=False)
 def connect_dbsql():
     ensure_started_then_poll(max_wait_s=300, show_status=True)
