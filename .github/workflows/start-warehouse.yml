@@ -10,9 +10,9 @@ jobs:
     steps:
       - name: Start and wait for Databricks SQL Warehouse
         env:
-        DATABRICKS_HOST: ${{ secrets.DATABRICKS_SERVER }}              # adb-xxxx.azuredatabricks.net  (NO https://)
-        DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_SERVER }}              # adb-xxxx.azuredatabricks.net  (NO https://)
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
         run: |
           set -euo pipefail
 
